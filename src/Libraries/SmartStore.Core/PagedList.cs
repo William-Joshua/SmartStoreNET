@@ -1,12 +1,12 @@
 ﻿using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.Linq;
 
 namespace SmartStore.Core
 {
     public abstract class PagedListBase : IPageable
     {
-
         protected PagedListBase()
         {
             this.PageIndex = 0;
@@ -36,7 +36,7 @@ namespace SmartStore.Core
 
         public void Init(IPageable pageable)
         {
-            Guard.ArgumentNotNull(pageable, "pageable");
+            Guard.NotNull(pageable, "pageable");
 
             this.PageIndex = pageable.PageIndex;
             this.PageSize = pageable.PageSize;
@@ -141,7 +141,6 @@ namespace SmartStore.Core
         {
             return Enumerable.Empty<int>().GetEnumerator();
         }
-
     }
 
     public class PagedList : PagedListBase
@@ -150,6 +149,16 @@ namespace SmartStore.Core
 			: base(pageIndex, pageSize, totalItemsCount)
         {
         }
-    }
+
+		public static PagedList<T> Create<T>(IEnumerable<T> source, int pageIndex, int pageSize)
+		{
+			return new PagedList<T>(source, pageIndex, pageSize);
+		}
+
+		public static PagedList<T> Create<T>(IEnumerable<T> source, int pageIndex, int pageSize, int totalCount)
+		{
+			return new PagedList<T>(source, pageIndex, pageSize, totalCount);
+		}
+	}
 
 }

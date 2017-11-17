@@ -6,6 +6,7 @@ using System.Linq;
 using System.Net;
 using System.Text;
 using System.Web;
+using System.Windows.Forms;
 using SmartStoreNetWebApiClient;
 
 namespace SmartStore.Net.WebApi
@@ -86,19 +87,46 @@ namespace SmartStore.Net.WebApi
 			}
 		}
 
-		private void GetResponse(HttpWebResponse webResponse, WebApiConsumerResponse response)
+		private void GetResponse(HttpWebResponse webResponse, WebApiConsumerResponse response, FolderBrowserDialog folderBrowserDialog)
 		{
 			if (webResponse == null)
 				return;
 
 			response.Status = string.Format("{0} {1}", (int)webResponse.StatusCode, webResponse.StatusDescription);
 			response.Headers = webResponse.Headers.ToString();
+            response.ContentType = webResponse.ContentType;
+            response.ContentLength = webResponse.ContentLength;
 
-			using (var reader = new StreamReader(webResponse.GetResponseStream(), Encoding.UTF8))
-			{
-				// TODO: file uploads should use async and await keywords
-				response.Content = reader.ReadToEnd();
-			}
+            if (string.Compare(response.ContentType, "application/pdf", StringComparison.OrdinalIgnoreCase) == 0)
+            {
+                folderBrowserDialog.Description = "Please select a folder to save the PDF file.";
+                var dialogResult = folderBrowserDialog.ShowDialog();
+                if (dialogResult == DialogResult.OK)
+                {
+                    string fileName = null;
+                    if (webResponse.Headers["Content-Disposition"] != null)
+                    {
+                        fileName = webResponse.Headers["Content-Disposition"].Replace("inline; filename=", "").Replace("\"", "");
+                    }
+                    if (fileName.IsEmpty())
+                    {
+                        fileName = "web-api-response.pdf";
+                    }
+
+                    using (var stream = File.Create(Path.Combine(folderBrowserDialog.SelectedPath, fileName)))
+                    {
+                        webResponse.GetResponseStream().CopyTo(stream);
+                    }
+                }
+            }
+            else
+            {
+                using (var reader = new StreamReader(webResponse.GetResponseStream(), Encoding.UTF8))
+                {
+                    // TODO: file uploads should use async and await keywords
+                    response.Content = reader.ReadToEnd();
+                }
+            }
 		}
 		
 		public static bool BodySupported(string method)
@@ -109,7 +137,7 @@ namespace SmartStore.Net.WebApi
 			return false;
 		}
 
-		public void AddApiFileParameter(Dictionary<string, object> multipartData, string filePath)
+		public void AddApiFileParameter(Dictionary<string, object> multipartData, string filePath, int pictureId)
 		{
 			var count = 0;
 			var paths = (filePath.Contains(";") ? filePath.Split(new char[] { ';' }, StringSplitOptions.RemoveEmptyEntries).ToList() : new List<string> { filePath });
@@ -124,6 +152,11 @@ namespace SmartStore.Net.WebApi
 					var name = Path.GetFileName(path);
 					var id = string.Format("my-file-{0}", ++count);
 					var apiFile = new ApiFileParameter(data, name, MimeMapping.GetMimeMapping(name));
+
+					if (pictureId != 0)
+					{
+						apiFile.Parameters.Add("PictureId", pictureId.ToString());
+					}
 
 					// test pass through of custom parameters
 					apiFile.Parameters.Add("CustomValue1", string.Format("{0:N}", Guid.NewGuid()));
@@ -214,7 +247,7 @@ namespace SmartStore.Net.WebApi
 			return request;
 		}
 		
-		public bool ProcessResponse(HttpWebRequest webRequest, WebApiConsumerResponse response)
+		public bool ProcessResponse(HttpWebRequest webRequest, WebApiConsumerResponse response, FolderBrowserDialog folderBrowserDialog)
 		{
 			if (webRequest == null)
 				return false;
@@ -225,13 +258,13 @@ namespace SmartStore.Net.WebApi
 			try
 			{
 				webResponse = webRequest.GetResponse() as HttpWebResponse;
-				GetResponse(webResponse, response);
+				GetResponse(webResponse, response, folderBrowserDialog);
 			}
 			catch (WebException wexc)
 			{
 				result = false;
 				webResponse = wexc.Response as HttpWebResponse;
-				GetResponse(webResponse, response);
+				GetResponse(webResponse, response, folderBrowserDialog);
 			}
 			catch (Exception exc)
 			{

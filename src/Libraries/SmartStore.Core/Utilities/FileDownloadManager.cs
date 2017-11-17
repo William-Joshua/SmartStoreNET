@@ -34,7 +34,7 @@ namespace SmartStore.Utilities
 		/// <param name="isLocal">Specifiers whether the file is located on the local server</param>
 		public FileDownloadResponse DownloadFile(string url, bool sendAuthCookie = false, int? timeout = null, bool isLocal = false)
 		{
-			Guard.ArgumentNotEmpty(() => url);
+			Guard.NotEmpty(url, nameof(url));
 			
 			url = WebHelper.GetAbsoluteUrl(url, _httpRequest);
 
@@ -58,6 +58,7 @@ namespace SmartStore.Utilities
 			if (sendAuthCookie)
 			{
 				req.SetFormsAuthenticationCookie(_httpRequest);
+				req.SetAnonymousIdentCookie(_httpRequest);
 			}
 
 			using (var resp = (HttpWebResponse)req.GetResponse())
@@ -154,12 +155,12 @@ namespace SmartStore.Utilities
 				Task <Stream> task = client.GetStreamAsync(item.Url);
 				await task;
 
-				int count;
-				bool canceled = false;
-				byte[] bytes = new byte[_bufferSize];
+				var count = 0;
+				var canceled = false;
+				var bytes = new byte[_bufferSize];
 
 				using (var srcStream = task.Result)
-				using (var dstStream = File.OpenWrite(item.Path))
+				using (var dstStream = File.Open(item.Path, FileMode.Create))
 				{
 					while ((count = srcStream.Read(bytes, 0, bytes.Length)) != 0 && !canceled)
 					{
@@ -184,7 +185,7 @@ namespace SmartStore.Utilities
 						item.ExceptionStatus = webExc.Status;
 
 					if (context.Logger != null)
-						context.Logger.Error(item.ToString(), exception);
+						context.Logger.Error(exception, item.ToString());
 				}
 				catch { }
 			}
@@ -196,7 +197,7 @@ namespace SmartStore.Utilities
 	{
 		public FileDownloadResponse(byte[] data, string fileName, string contentType)
 		{
-			Guard.ArgumentNotNull(() => data);
+			Guard.NotNull(data, nameof(data));
 
 			this.Data = data;
 			this.FileName = fileName;

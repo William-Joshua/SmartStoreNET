@@ -1,9 +1,6 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Linq.Expressions;
 using SmartStore.Collections;
-using SmartStore.Core;
 using SmartStore.Core.Domain.Catalog;
 using SmartStore.Core.Domain.Customers;
 using SmartStore.Core.Domain.Discounts;
@@ -16,13 +13,13 @@ namespace SmartStore.Services.Catalog
     /// </summary>
     public partial interface IProductService
     {
-        #region Products
+		#region Products
 
-        /// <summary>
-        /// Delete a product
-        /// </summary>
-        /// <param name="product">Product</param>
-        void DeleteProduct(Product product);
+		/// <summary>
+		/// Delete a product
+		/// </summary>
+		/// <param name="product">Product</param>
+		void DeleteProduct(Product product);
 
         /// <summary>
         /// Gets all products displayed on the home page
@@ -41,8 +38,9 @@ namespace SmartStore.Services.Catalog
         /// Gets products by identifier
         /// </summary>
         /// <param name="productIds">Product identifiers</param>
+		/// <param name="flags">Which navigation properties to eager load</param>
         /// <returns>Products</returns>
-        IList<Product> GetProductsByIds(int[] productIds);
+        IList<Product> GetProductsByIds(int[] productIds, ProductLoadFlags flags = ProductLoadFlags.None);
 
         /// <summary>
         /// Inserts a product
@@ -54,34 +52,7 @@ namespace SmartStore.Services.Catalog
         /// Updates the product
         /// </summary>
         /// <param name="product">Product</param>
-		void UpdateProduct(Product product, bool publishEvent = true);
-
-        /// <summary>
-        /// Gets the total count of products matching the criteria
-        /// </summary>
-        int CountProducts(ProductSearchContext productSearchContext);
-
-        /// <summary>
-        /// Search products
-        /// </summary>
-        IPagedList<Product> SearchProducts(ProductSearchContext productSearchContext);
-
-		/// <summary>
-		/// Builds a product query based on the options in ProductSearchContext parameter.
-		/// </summary>
-		/// <param name="ctx">Parameters to build the query.</param>
-		/// <param name="allowedCustomerRolesIds">Customer role ids (ACL).</param>
-		/// <param name="searchLocalizedValue">Whether to search localized values.</param>
-		IQueryable<Product> PrepareProductSearchQuery(ProductSearchContext ctx, IEnumerable<int> allowedCustomerRolesIds = null, bool searchLocalizedValue = false);
-
-		/// <summary>
-		/// Builds a product query based on the options in ProductSearchContext parameter.
-		/// </summary>
-		/// <param name="ctx">Parameters to build the query.</param>
-		/// <param name="selector">Data projector</param>
-		/// <param name="allowedCustomerRolesIds">Customer role ids (ACL).</param>
-		/// <param name="searchLocalizedValue">Whether to search localized values.</param>
-		IQueryable<TResult> PrepareProductSearchQuery<TResult>(ProductSearchContext ctx, Expression<Func<Product, TResult>> selector, IEnumerable<int> allowedCustomerRolesIds = null, bool searchLocalizedValue = false);
+		void UpdateProduct(Product product);
 
         /// <summary>
         /// Update product review totals
@@ -182,13 +153,6 @@ namespace SmartStore.Services.Catalog
 		/// <returns>Map of applied discounts</returns>
 		Multimap<int, Discount> GetAppliedDiscountsByProductIds(int[] productIds);
 
-		/// <summary>
-		/// Get product specification attributes by product identifiers
-		/// </summary>
-		/// <param name="productIds">Product identifiers</param>
-		/// <returns>Map of product specification attributes</returns>
-		Multimap<int, ProductSpecificationAttribute> GetProductSpecificationAttributesByProductIds(int[] productIds);
-
         #endregion
 
         #region Related products
@@ -251,12 +215,20 @@ namespace SmartStore.Services.Catalog
         /// <returns>Cross-sell product collection</returns>
         IList<CrossSellProduct> GetCrossSellProductsByProductId1(int productId1, bool showHidden = false);
 
-        /// <summary>
-        /// Gets a cross-sell product
-        /// </summary>
-        /// <param name="crossSellProductId">Cross-sell product identifier</param>
-        /// <returns>Cross-sell product</returns>
-        CrossSellProduct GetCrossSellProductById(int crossSellProductId);
+		/// <summary>
+		/// Gets a cross-sell product collection by many product identifiers
+		/// </summary>
+		/// <param name="productIds">A sequence of alpha product identifiers</param>
+		/// <param name="showHidden">A value indicating whether to show hidden records</param>
+		/// <returns>Cross-sell product collection</returns>
+		IList<CrossSellProduct> GetCrossSellProductsByProductIds(IEnumerable<int> productIds, bool showHidden = false);
+
+		/// <summary>
+		/// Gets a cross-sell product
+		/// </summary>
+		/// <param name="crossSellProductId">Cross-sell product identifier</param>
+		/// <returns>Cross-sell product</returns>
+		CrossSellProduct GetCrossSellProductById(int crossSellProductId);
 
         /// <summary>
         /// Inserts a cross-sell product
@@ -413,6 +385,25 @@ namespace SmartStore.Services.Catalog
 		Multimap<int, ProductBundleItem> GetBundleItemsByProductIds(int[] productIds, bool showHidden = false);
 
 		#endregion
-
     }
+
+	[Flags]
+	public enum ProductLoadFlags
+	{
+		None = 0,
+		WithCategories = 1 << 0,
+		WithManufacturers = 1 << 1,
+		WithPictures = 1 << 2,
+		WithReviews = 1 << 3,
+		WithSpecificationAttributes = 1 << 4,
+		WithAttributes = 1 << 5,
+		WithAttributeValues = 1 << 7,
+		WithAttributeCombinations = 1 << 8,
+		WithTags = 1 << 9,
+		WithTierPrices = 1 << 10,
+		WithDiscounts = 1 << 11,
+		WithBundleItems = 1 << 12,
+		WithDeliveryTime = 1 << 13,
+		Full = WithCategories | WithManufacturers | WithPictures | WithReviews | WithSpecificationAttributes | WithAttributes | WithAttributeValues | WithAttributeCombinations | WithTags | WithTierPrices | WithDiscounts | WithBundleItems | WithDeliveryTime
+	}
 }

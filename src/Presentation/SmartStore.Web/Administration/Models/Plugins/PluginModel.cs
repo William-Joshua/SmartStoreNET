@@ -2,19 +2,19 @@
 using System.Web.Mvc;
 using FluentValidation.Attributes;
 using SmartStore.Admin.Validators.Plugins;
-using SmartStore.Licensing;
 using SmartStore.Web.Framework;
 using SmartStore.Web.Framework.Localization;
 using SmartStore.Web.Framework.Modelling;
 
 namespace SmartStore.Admin.Models.Plugins
 {
-    [Validator(typeof(PluginValidator))]
+	[Validator(typeof(PluginValidator))]
     public class PluginModel : ModelBase, ILocalizedModel<PluginLocalizedModel>
     {
         public PluginModel()
         {
             Locales = new List<PluginLocalizedModel>();
+			LicenseLabel = new LicenseLabelModel();
         }
 
         [SmartResourceDisplayName("Admin.Configuration.Plugins.Fields.Group")]
@@ -52,27 +52,7 @@ namespace SmartStore.Admin.Models.Plugins
         [SmartResourceDisplayName("Admin.Configuration.Plugins.Fields.Installed")]
         public bool Installed { get; set; }
 
-		public string LicenseUrl { get; set; }
-		public bool IsLicensable { get; set; }
-		public LicensingState LicenseState { get; set; }
-		public string TruncatedLicenseKey { get; set; }
-		public int? RemainingDemoUsageDays { get; set; }
-
-		public string RemainingDemoUsageDaysLabel
-		{
-			get
-			{
-				if (RemainingDemoUsageDays.HasValue)
-				{
-					if (RemainingDemoUsageDays <= 3)
-						return "label-important";
-
-					if (RemainingDemoUsageDays <= 6)
-						return "label-warning";
-				}
-				return "label-success";
-			}
-		}
+		public LicenseLabelModel LicenseLabel { get; set; }
 
 		public bool IsConfigurable { get; set; }
 
@@ -86,7 +66,7 @@ namespace SmartStore.Admin.Models.Plugins
     }
 
 
-    public class PluginLocalizedModel : ILocalizedModelLocal
+	public class PluginLocalizedModel : ILocalizedModelLocal
     {
         public int LanguageId { get; set; }
 

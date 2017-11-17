@@ -7,9 +7,6 @@ using SmartStore.Services.Customers;
 
 namespace SmartStore.Services.Authentication
 {
-    /// <summary>
-    /// Authentication service
-    /// </summary>
     public partial class FormsAuthenticationService : IAuthenticationService
     {
         private readonly HttpContextBase _httpContext;
@@ -19,12 +16,6 @@ namespace SmartStore.Services.Authentication
 
         private Customer _cachedCustomer;
 
-        /// <summary>
-        /// Ctor
-        /// </summary>
-        /// <param name="httpContext">HTTP context</param>
-        /// <param name="customerService">Customer service</param>
-        /// <param name="customerSettings">Customer settings</param>
         public FormsAuthenticationService(HttpContextBase httpContext, ICustomerService customerService, CustomerSettings customerSettings)
         {
             this._httpContext = httpContext;
@@ -74,11 +65,11 @@ namespace SmartStore.Services.Authentication
 
         public virtual Customer GetAuthenticatedCustomer()
         {
-            if (_cachedCustomer != null)
-                return _cachedCustomer;
+			if (_cachedCustomer != null)
+				return _cachedCustomer;
 
-            if (_httpContext == null || _httpContext.Request == null || !_httpContext.Request.IsAuthenticated || _httpContext.User == null)
-                return null;
+			if (_httpContext?.Request == null || !_httpContext.Request.IsAuthenticated || _httpContext.User == null)
+				return null;
 
 			Customer customer = null;
 			FormsIdentity formsIdentity = null;
@@ -98,8 +89,8 @@ namespace SmartStore.Services.Authentication
 				_cachedCustomer = customer;
 			}
 
-            return _cachedCustomer;
-        }
+			return _cachedCustomer;
+		}
 
         public virtual Customer GetAuthenticatedCustomerFromTicket(FormsAuthenticationTicket ticket)
         {

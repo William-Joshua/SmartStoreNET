@@ -8,6 +8,7 @@ using System.Runtime.Serialization.Formatters.Binary;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 using SmartStore.ComponentModel;
 using SmartStore.Utilities;
 
@@ -44,7 +45,7 @@ namespace SmartStore
 
 		public static object Convert(this object value, Type to, CultureInfo culture)
 		{
-			Guard.ArgumentNotNull(to, "to");
+			Guard.NotNull(to, nameof(to));
 
 			if (value == null || value == DBNull.Value || to.IsInstanceOfType(value))
 			{
@@ -97,19 +98,6 @@ namespace SmartStore
         #endregion
 
         #region String
-
-        public static T ToEnum<T>(this string value, T defaultValue) where T : IComparable, IFormattable
-        {
-			Guard.ArgumentIsEnumType(typeof(T), "T");
-
-			T result;
-			if (CommonHelper.TryConvert(value, out result))
-			{
-				return result;
-			}
-
-            return defaultValue;
-        }
 
         public static int ToInt(this string value, int defaultValue = 0)
         {
@@ -223,7 +211,7 @@ namespace SmartStore
 
         public static byte[] ToByteArray(this Stream stream)
         {
-            Guard.ArgumentNotNull(stream, "stream");
+			Guard.NotNull(stream, nameof(stream));
 
 			if (stream is MemoryStream)
 			{
@@ -231,25 +219,48 @@ namespace SmartStore
 			}
 			else
 			{
-				using (var ms = new MemoryStream())
+				using (var streamReader = new MemoryStream())
 				{
-					stream.CopyTo(ms);
-					return ms.ToArray();
+					stream.CopyTo(streamReader);
+					return streamReader.ToArray();
 				}
 			}
-        }
+		}
+
+		public static async Task<byte[]> ToByteArrayAsync(this Stream stream)
+		{
+			Guard.NotNull(stream, nameof(stream));
+
+			if (stream is MemoryStream)
+			{
+				return ((MemoryStream)stream).ToArray();
+			}
+			else
+			{
+				using (var streamReader = new MemoryStream())
+				{
+					await stream.CopyToAsync(streamReader);
+					return streamReader.ToArray();
+				}
+			}
+		}
 
 		public static string AsString(this Stream stream)
 		{
 			return stream.AsString(Encoding.UTF8);
 		}
 
-        public static string AsString(this Stream stream, Encoding encoding)
+		public static Task<string> AsStringAsync(this Stream stream)
+		{
+			return stream.AsStringAsync(Encoding.UTF8);
+		}
+
+		public static string AsString(this Stream stream, Encoding encoding)
         {
-			Guard.ArgumentNotNull(() => encoding);
-			
+			Guard.NotNull(encoding, nameof(encoding));
+
 			// convert stream to string
-            string result;
+			string result;
 
 			if (stream.CanSeek)
 			{
@@ -264,16 +275,36 @@ namespace SmartStore
             return result;
         }
 
-        #endregion
+		public static Task<string> AsStringAsync(this Stream stream, Encoding encoding)
+		{
+			Guard.NotNull(encoding, nameof(encoding));
 
-        #region ByteArray
+			// convert stream to string
+			Task<string> result;
 
-        /// <summary>
-        /// Converts a byte array into an object.
-        /// </summary>
-        /// <param name="bytes">Object to deserialize. May be null.</param>
-        /// <returns>Deserialized object, or null if input was null.</returns>
-        public static object ToObject(this byte[] bytes)
+			if (stream.CanSeek)
+			{
+				stream.Position = 0;
+			}
+
+			using (StreamReader sr = new StreamReader(stream, encoding))
+			{
+				result = sr.ReadToEndAsync();
+			}
+
+			return result;
+		}
+
+		#endregion
+
+		#region ByteArray
+
+		/// <summary>
+		/// Converts a byte array into an object.
+		/// </summary>
+		/// <param name="bytes">Object to deserialize. May be null.</param>
+		/// <returns>Deserialized object, or null if input was null.</returns>
+		public static object ToObject(this byte[] bytes)
         {
             if (bytes == null)
                 return null;
@@ -297,9 +328,9 @@ namespace SmartStore
 		[DebuggerStepThrough]
 		public static string Hash(this byte[] value, bool toBase64 = false)
         {
-            Guard.ArgumentNotNull(value, "value");
+			Guard.NotNull(value, nameof(value));
 
-            using (MD5 md5 = MD5.Create())
+			using (MD5 md5 = MD5.Create())
             {
 
                 if (toBase64)
@@ -329,7 +360,7 @@ namespace SmartStore
 		/// <returns>The compressed result</returns>
 		public static byte[] Zip(this byte[] buffer)
 		{
-			Guard.ArgumentNotNull(() => buffer);
+			Guard.NotNull(buffer, nameof(buffer));
 
 			using (var compressedStream = new MemoryStream())
 			using (var zipStream = new GZipStream(compressedStream, CompressionMode.Compress))
@@ -347,7 +378,7 @@ namespace SmartStore
 		/// <returns>The decompressed result</returns>
 		public static byte[] UnZip(this byte[] buffer)
 		{
-			Guard.ArgumentNotNull(() => buffer);
+			Guard.NotNull(buffer, nameof(buffer));
 
 			using (var compressedStream = new MemoryStream(buffer))
 			using (var zipStream = new GZipStream(compressedStream, CompressionMode.Decompress))
@@ -369,8 +400,8 @@ namespace SmartStore
 
         public static object ToObject(this IDictionary<string, object> values, Type objectType)
         {
-            Guard.ArgumentNotEmpty(values, "values");
-            Guard.ArgumentNotNull(objectType, "objectType");
+            Guard.NotEmpty(values, nameof(values));
+            Guard.NotNull(objectType, nameof(objectType));
 
             if (!DictionaryConverter.CanCreateType(objectType))
             {

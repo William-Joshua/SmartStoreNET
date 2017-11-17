@@ -17,7 +17,7 @@ namespace SmartStore.Core.Domain.Catalog
     /// Represents a product
     /// </summary>
     [DataContract]
-	public partial class Product : BaseEntity, ISoftDeletable, ILocalizedEntity, ISlugSupported, IAclSupported, IStoreMappingSupported, IMergedData
+	public partial class Product : BaseEntity, IAuditable, ISoftDeletable, ILocalizedEntity, ISlugSupported, IAclSupported, IStoreMappingSupported, IMergedData
 	{
         private ICollection<ProductCategory> _productCategories;
         private ICollection<ProductManufacturer> _productManufacturers;
@@ -179,7 +179,7 @@ namespace SmartStore.Core.Domain.Catalog
 			[DebuggerStepThrough]
 			get
 			{
-				return this.GetMergedDataValue<string>("Sku", _sku);
+				return this.GetMergedDataValue<string>(nameof(Sku), _sku);
 			}
 			set
 			{
@@ -197,7 +197,7 @@ namespace SmartStore.Core.Domain.Catalog
 			[DebuggerStepThrough]
 			get
 			{
-				return this.GetMergedDataValue<string>("ManufacturerPartNumber", _manufacturerPartNumber);
+				return this.GetMergedDataValue<string>(nameof(ManufacturerPartNumber), _manufacturerPartNumber);
 			}
 			set
 			{
@@ -215,7 +215,7 @@ namespace SmartStore.Core.Domain.Catalog
 			[DebuggerStepThrough]
 			get
 			{
-				return this.GetMergedDataValue<string>("Gtin", _gtin);
+				return this.GetMergedDataValue<string>(nameof(Gtin), _gtin);
 			}
 			set
 			{
@@ -395,7 +395,7 @@ namespace SmartStore.Core.Domain.Catalog
 			[DebuggerStepThrough]
 			get
 			{
-				return this.GetMergedDataValue("StockQuantity", _stockQuantity);
+				return this.GetMergedDataValue(nameof(StockQuantity), _stockQuantity);
 			}
 			set
 			{
@@ -442,7 +442,7 @@ namespace SmartStore.Core.Domain.Catalog
 			[DebuggerStepThrough]
 			get
             {
-                return this.GetMergedDataValue<int>("BackorderModeId", _backorderModeId);
+                return this.GetMergedDataValue<int>(nameof(BackorderModeId), _backorderModeId);
             }
             set
             {
@@ -468,10 +468,28 @@ namespace SmartStore.Core.Domain.Catalog
 		[DataMember]
 		public int OrderMaximumQuantity { get; set; }
 
-		/// <summary>
-		/// Gets or sets the comma seperated list of allowed quantities. null or empty if any quantity is allowed
-		/// </summary>
-		[DataMember]
+        /// <summary>
+        /// Gets or sets the quantity step
+        /// </summary>
+        [DataMember]
+        public int QuantityStep { get; set; }
+
+        /// <summary>
+        /// Gets or sets the quantity control type
+        /// </summary>
+        [DataMember]
+        public QuantityControlType QuantiyControlType { get; set; }
+
+        /// <summary>
+        /// Gets or sets a value to specify whether or not to hide the quantity input control
+        /// </summary>
+        [DataMember]
+        public bool HideQuantityControl { get; set; }
+
+        /// <summary>
+        /// Gets or sets the comma seperated list of allowed quantities. null or empty if any quantity is allowed
+        /// </summary>
+        [DataMember]
 		public string AllowedQuantities { get; set; }
 
 		/// <summary>
@@ -507,7 +525,7 @@ namespace SmartStore.Core.Domain.Catalog
 			[DebuggerStepThrough]
 			get
 			{
-				return this.GetMergedDataValue<decimal>("Price", _price);
+				return this.GetMergedDataValue<decimal>(nameof(Price), _price);
 			}
 			set
 			{
@@ -604,7 +622,7 @@ namespace SmartStore.Core.Domain.Catalog
 			[DebuggerStepThrough]
 			get
 			{
-				return this.GetMergedDataValue<decimal>("Length", _length);
+				return this.GetMergedDataValue<decimal>(nameof(Length), _length);
 			}
 			set
 			{
@@ -621,7 +639,7 @@ namespace SmartStore.Core.Domain.Catalog
 			[DebuggerStepThrough]
 			get
 			{
-				return this.GetMergedDataValue<decimal>("Width", _width);
+				return this.GetMergedDataValue<decimal>(nameof(Width), _width);
 			}
 			set
 			{
@@ -638,7 +656,7 @@ namespace SmartStore.Core.Domain.Catalog
 			[DebuggerStepThrough]
 			get
 			{
-				return this.GetMergedDataValue<decimal>("Height", _height);
+				return this.GetMergedDataValue<decimal>(nameof(Height), _height);
 			}
 			set
 			{
@@ -697,7 +715,7 @@ namespace SmartStore.Core.Domain.Catalog
 			[DebuggerStepThrough]
 			get
 			{
-				return this.GetMergedDataValue<int?>("DeliveryTimeId", _deliveryTimeId);
+				return this.GetMergedDataValue<int?>(nameof(DeliveryTimeId), _deliveryTimeId);
 			}
 			set
 			{
@@ -717,7 +735,7 @@ namespace SmartStore.Core.Domain.Catalog
             [DebuggerStepThrough]
             get
             {
-                return this.GetMergedDataValue<int?>("QuantityUnitId", _quantityUnitId);
+                return this.GetMergedDataValue<int?>(nameof(QuantityUnitId), _quantityUnitId);
             }
             set
             {
@@ -728,6 +746,23 @@ namespace SmartStore.Core.Domain.Catalog
         [DataMember]
         public virtual QuantityUnit QuantityUnit { get; set; }
 
+		/// <summary>
+		/// Gets or sets the customs tariff number
+		/// </summary>
+		[DataMember]
+		public string CustomsTariffNumber { get; set; }
+
+		/// <summary>
+		/// Gets or sets the country of origin identifier
+		/// </summary>
+		[DataMember]
+		public int? CountryOfOriginId { get; set; }
+
+		/// <summary>
+		/// Gets or sets the country of origin
+		/// </summary>
+		[DataMember]
+		public virtual Country CountryOfOrigin { get; set; }
 
 		/// <summary>
 		/// Gets or sets if base price quotation (PAnGV) is enabled
@@ -751,7 +786,7 @@ namespace SmartStore.Core.Domain.Catalog
 			[DebuggerStepThrough]
 			get
 			{
-				return this.GetMergedDataValue<decimal?>("BasePriceAmount", _basePriceAmount);
+				return this.GetMergedDataValue<decimal?>(nameof(BasePriceAmount), _basePriceAmount);
 			}
 			set
 			{
@@ -769,7 +804,7 @@ namespace SmartStore.Core.Domain.Catalog
 			[DebuggerStepThrough]
 			get
 			{
-				return this.GetMergedDataValue<int?>("BasePriceBaseAmount", _basePriceBaseAmount);
+				return this.GetMergedDataValue<int?>(nameof(BasePriceBaseAmount), _basePriceBaseAmount);
 			}
 			set
 			{
@@ -809,6 +844,12 @@ namespace SmartStore.Core.Domain.Catalog
 		/// </summary>
 		[DataMember]
 		public bool BundlePerItemShoppingCart { get; set; }
+
+		/// <summary>
+		/// Gets or sets the main picture id
+		/// </summary>
+		[DataMember]
+		public int? MainPictureId { get; set; }
 
 		/// <summary>
 		/// Gets or sets the product type

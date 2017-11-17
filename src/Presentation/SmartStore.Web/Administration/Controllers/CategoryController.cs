@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Linq;
+using System.Collections.Generic;
 using System.Web.Mvc;
 using SmartStore.Admin.Models.Catalog;
 using SmartStore.Collections;
@@ -14,7 +15,6 @@ using SmartStore.Services.Catalog;
 using SmartStore.Services.Common;
 using SmartStore.Services.Customers;
 using SmartStore.Services.Discounts;
-using SmartStore.Services.Filter;
 using SmartStore.Services.Helpers;
 using SmartStore.Services.Localization;
 using SmartStore.Services.Media;
@@ -56,7 +56,6 @@ namespace SmartStore.Admin.Controllers
         private readonly AdminAreaSettings _adminAreaSettings;
         private readonly CatalogSettings _catalogSettings;
 		private readonly IEventPublisher _eventPublisher;
-        private readonly IFilterService _filterService;
 
 		#endregion
 
@@ -74,8 +73,7 @@ namespace SmartStore.Admin.Controllers
 			IDateTimeHelper dateTimeHelper,
 			AdminAreaSettings adminAreaSettings,
             CatalogSettings catalogSettings,
-            IEventPublisher eventPublisher, 
-			IFilterService filterService)
+            IEventPublisher eventPublisher)
         {
             this._categoryService = categoryService;
             this._categoryTemplateService = categoryTemplateService;
@@ -98,7 +96,6 @@ namespace SmartStore.Admin.Controllers
             this._adminAreaSettings = adminAreaSettings;
             this._catalogSettings = catalogSettings;
 			this._eventPublisher = eventPublisher;
-            this._filterService = filterService;
         }
 
         #endregion
@@ -117,6 +114,8 @@ namespace SmartStore.Admin.Controllers
                 _localizedEntityService.SaveLocalizedValue(category, x => x.Description, localized.Description, localized.LanguageId);
 
 				_localizedEntityService.SaveLocalizedValue(category, x => x.BottomDescription, localized.BottomDescription, localized.LanguageId);
+
+                _localizedEntityService.SaveLocalizedValue(category, x => x.BadgeText, localized.BadgeText, localized.LanguageId);
 
                 _localizedEntityService.SaveLocalizedValue(category, x => x.MetaKeywords, localized.MetaKeywords, localized.LanguageId);
 
@@ -183,6 +182,14 @@ namespace SmartStore.Admin.Controllers
             model.AvailableDefaultViewModes.Add(
                 new SelectListItem { Value = "list", Text = _localizationService.GetResource("Common.List"), Selected = model.DefaultViewMode.IsCaseInsensitiveEqual("list") }
             );
+
+			// add available badges
+			model.AvailableBadgeStyles.Add(new SelectListItem { Value = "0", Text = "Default", Selected = model.BadgeStyle == 0 });
+            model.AvailableBadgeStyles.Add(new SelectListItem { Value = "1", Text = "Primary", Selected = model.BadgeStyle == 1 });
+            model.AvailableBadgeStyles.Add(new SelectListItem { Value = "2", Text = "Success", Selected = model.BadgeStyle == 2 });
+            model.AvailableBadgeStyles.Add(new SelectListItem { Value = "3", Text = "Info", Selected = model.BadgeStyle == 3 });
+            model.AvailableBadgeStyles.Add(new SelectListItem { Value = "4", Text = "Warning", Selected = model.BadgeStyle == 4 });
+            model.AvailableBadgeStyles.Add(new SelectListItem { Value = "5", Text = "Danger", Selected = model.BadgeStyle == 5 });
         }
 
         [NonAction]
@@ -286,16 +293,17 @@ namespace SmartStore.Admin.Controllers
         public ActionResult List(GridCommand command, CategoryListModel model)
         {
 			var gridModel = new GridModel<CategoryModel>();
-
+			
 			if (_permissionService.Authorize(StandardPermissionProvider.ManageCatalog))
 			{
-				var categories = _categoryService.GetAllCategories(model.SearchCategoryName, command.Page - 1, command.PageSize, true, model.SearchAlias, true, false, model.SearchStoreId);
-				var mappedCategories = categories.ToDictionary(x => x.Id);
-
+				var categories = _categoryService.GetAllCategories(model.SearchCategoryName, command.Page - 1, command.PageSize, true, model.SearchAlias, false, model.SearchStoreId);
 				gridModel.Data = categories.Select(x =>
 				{
 					var categoryModel = x.ToModel();
-					categoryModel.Breadcrumb = x.GetCategoryBreadCrumb(_categoryService, mappedCategories);
+					categoryModel.Breadcrumb = x.GetCategoryPath(
+						_categoryService, 
+						languageId: _workContext.WorkingLanguage.Id, 
+						withAlias: true);
 					return categoryModel;
 				});
 
@@ -314,22 +322,24 @@ namespace SmartStore.Admin.Controllers
             };
         }
 
-        //ajax
+        // Ajax
         public ActionResult AllCategories(string label, int selectedId)
         {
-            var categories = _categoryService.GetAllCategories(showHidden: true);
-            var mappedCategories = categories.ToDictionary(x => x.Id);
+			var categoryTree = _categoryService.GetCategoryTree(includeHidden: true);
+			var categories = categoryTree.Flatten(false);
 
-            if (label.HasValue())
+			if (label.HasValue())
             {
-                categories.Insert(0, new Category { Name = label, Id = 0 });
-            }
+				categories = (new[] { new Category { Name = label, Id = 0 } }).Concat(categories);
 
-            var query = 
+			}
+
+			var query = 
 				from c in categories
-				select new { 
+				select new
+				{ 
 					id = c.Id.ToString(),
-					text = c.GetCategoryBreadCrumb(_categoryService, mappedCategories), 
+					text = c.GetCategoryPath(_categoryService, withAlias: true), 
 					selected = c.Id == selectedId
 				};
 
@@ -353,13 +363,13 @@ namespace SmartStore.Admin.Controllers
 			for (int i = mru.Count - 1; i >= 0; --i)
 			{
 				string id = mru[i];
-				var item = categories.FirstOrDefault(x => x.Id.ToString() == id);
+				var item = categoryTree.SelectNodeById(id);
 				if (item != null)
 				{
 					data.Insert(0, new
 					{
 						id = id,
-						text = item.GetCategoryBreadCrumb(_categoryService, mappedCategories),
+						text = _categoryService.GetCategoryPath(item),
 						selected = false
 					});
 				}
@@ -384,7 +394,7 @@ namespace SmartStore.Admin.Controllers
 			return View(model);
         }
 
-        //ajax
+        // Ajax
         [AcceptVerbs(HttpVerbs.Post)]
         public ActionResult TreeLoadChildren(TreeViewItem node, CategoryTreeModel model)
         {
@@ -501,15 +511,10 @@ namespace SmartStore.Admin.Controllers
 
             PrepareTemplatesModel(model);
             PrepareCategoryModel(model, null, true);
-
 			PrepareAclModel(model, null, false);
-
 			PrepareStoresMappingModel(model, null, false);
 
-            model.PageSize = 12;
             model.Published = true;
-
-            model.AllowCustomersToSelectPageSize = true;
 
             return View(model);
         }
@@ -524,8 +529,6 @@ namespace SmartStore.Admin.Controllers
             if (ModelState.IsValid)
             {
                 var category = model.ToEntity();
-                category.CreatedOnUtc = DateTime.UtcNow;
-                category.UpdatedOnUtc = DateTime.UtcNow;
 
 				MediaHelper.UpdatePictureTransientStateFor(category, c => c.PictureId);
 
@@ -538,7 +541,7 @@ namespace SmartStore.Admin.Controllers
 				//locales
                 UpdateLocales(category, model);
                 
-				//disounts
+				//discounts
                 var allDiscounts = _discountService.GetAllDiscounts(DiscountType.AssignedToCategories, null, true);
                 foreach (var discount in allDiscounts)
                 {
@@ -574,9 +577,9 @@ namespace SmartStore.Admin.Controllers
             //parent categories
             if (model.ParentCategoryId.HasValue)
             {
-                var parentCategory = _categoryService.GetCategoryById(model.ParentCategoryId.Value);
-                if (parentCategory != null && !parentCategory.Deleted)
-                    model.ParentCategoryBreadcrumb = parentCategory.GetCategoryBreadCrumb(_categoryService);
+                var parentCategory = _categoryService.GetCategoryTree(model.ParentCategoryId.Value, true);
+                if (parentCategory != null)
+                    model.ParentCategoryBreadcrumb = _categoryService.GetCategoryPath(parentCategory);
                 else
                     model.ParentCategoryId = 0;
             }
@@ -603,10 +606,10 @@ namespace SmartStore.Admin.Controllers
 			//parent categories
 			if (model.ParentCategoryId.HasValue)
             {
-                var parentCategory = _categoryService.GetCategoryById(model.ParentCategoryId.Value);
+                var parentCategory = _categoryService.GetCategoryTree(model.ParentCategoryId.Value, true);
 
-                if (parentCategory != null && !parentCategory.Deleted)
-                    model.ParentCategoryBreadcrumb = parentCategory.GetCategoryBreadCrumb(_categoryService);
+                if (parentCategory != null)
+                    model.ParentCategoryBreadcrumb = _categoryService.GetCategoryPath(parentCategory);
                 else
                     model.ParentCategoryId = 0;
             }
@@ -617,6 +620,7 @@ namespace SmartStore.Admin.Controllers
 				locale.FullName = category.GetLocalized(x => x.FullName, languageId, false, false);
                 locale.Description = category.GetLocalized(x => x.Description, languageId, false, false);
 				locale.BottomDescription = category.GetLocalized(x => x.BottomDescription, languageId, false, false);
+                locale.BadgeText = category.GetLocalized(x => x.BadgeText, languageId, false, false);
                 locale.MetaKeywords = category.GetLocalized(x => x.MetaKeywords, languageId, false, false);
                 locale.MetaDescription = category.GetLocalized(x => x.MetaDescription, languageId, false, false);
                 locale.MetaTitle = category.GetLocalized(x => x.MetaTitle, languageId, false, false);
@@ -647,10 +651,10 @@ namespace SmartStore.Admin.Controllers
             if (ModelState.IsValid)
             {
                 category = model.ToEntity(category);
+				category.ParentCategoryId = model.ParentCategoryId ?? 0;
 
 				MediaHelper.UpdatePictureTransientStateFor(category, c => c.PictureId);
 
-                category.UpdatedOnUtc = DateTime.UtcNow;
                 _categoryService.UpdateCategory(category);
 
                 //search engine name
@@ -705,9 +709,9 @@ namespace SmartStore.Admin.Controllers
             //parent categories
             if (model.ParentCategoryId.HasValue)
             {
-                var parentCategory = _categoryService.GetCategoryById(model.ParentCategoryId.Value);
-                if (parentCategory != null && !parentCategory.Deleted)
-                    model.ParentCategoryBreadcrumb = parentCategory.GetCategoryBreadCrumb(_categoryService);
+                var parentCategory = _categoryService.GetCategoryTree(model.ParentCategoryId.Value, true);
+                if (parentCategory != null)
+                    model.ParentCategoryBreadcrumb = _categoryService.GetCategoryPath(parentCategory);
                 else
                     model.ParentCategoryId = 0;
             }

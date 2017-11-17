@@ -1,7 +1,14 @@
 using System;
-using System.Text.RegularExpressions;
 using System.Linq;
 using System.Runtime.Caching;
+using System.Threading.Tasks;
+using System.Collections.Concurrent;
+using System.Threading;
+using SmartStore.Core.Async;
+using System.Collections;
+using System.Collections.Generic;
+using SmartStore.Utilities;
+using System.Text.RegularExpressions;
 
 namespace SmartStore.Core.Caching
 {
@@ -10,13 +17,19 @@ namespace SmartStore.Core.Caching
 		// Wwe put a special string into cache if value is null,
 		// otherwise our 'Contains()' would always return false,
 		// which is bad if we intentionally wanted to save NULL values.
-		private const string FakeNull = "__[NULL]__";
+		public const string FakeNull = "__[NULL]__";
 
 		private readonly MemoryCache _cache;
+		private readonly ConcurrentDictionary<string, SemaphoreSlim> _keyLocks = new ConcurrentDictionary<string, SemaphoreSlim>();
 
 		public MemoryCacheManager()
 		{
 			_cache = new MemoryCache("SmartStore");
+		}
+
+		public bool IsDistributedCache
+		{
+			get { return false; }
 		}
 
 		private bool TryGet<T>(string key, out T value)
@@ -56,13 +69,13 @@ namespace SmartStore.Core.Caching
 				return value;
 			}
 
-			lock (_cache)
+			lock (String.Intern(key))
 			{
 				// atomic operation must be outer locked
 				if (!TryGet(key, out value))
 				{
 					value = acquirer();
-					Set(key, value, duration);
+					Put(key, value, duration);
 					return value;
 				}
 			}
@@ -70,7 +83,32 @@ namespace SmartStore.Core.Caching
 			return value;
 		}
 
-		public void Set(string key, object value, TimeSpan? duration = null)
+		public async Task<T> GetAsync<T>(string key, Func<Task<T>> acquirer, TimeSpan? duration = null)
+		{
+			T value;
+
+			if (TryGet(key, out value))
+			{
+				return value;
+			}
+
+			// get the async (semaphore) locker specific to this key
+			var keyLock = AsyncLock.Acquire(key);
+
+			using (await keyLock.LockAsync())
+			{
+				if (!TryGet(key, out value))
+				{
+					value = await acquirer().ConfigureAwait(false);
+					Put(key, value, duration);
+					return value;
+				}
+			}
+
+			return value;
+		}
+
+		public void Put(string key, object value, TimeSpan? duration = null)
 		{
 			_cache.Set(key, value ?? FakeNull, GetCacheItemPolicy(duration));
 		}
@@ -85,9 +123,9 @@ namespace SmartStore.Core.Caching
 			_cache.Remove(key);
         }
 
-		public string[] Keys(string pattern)
+		public IEnumerable<string> Keys(string pattern)
 		{
-			Guard.ArgumentNotEmpty(() => pattern);
+			Guard.NotEmpty(pattern, nameof(pattern));
 
 			var keys = _cache.AsParallel().Select(x => x.Key);
 
@@ -96,14 +134,14 @@ namespace SmartStore.Core.Caching
 				return keys.ToArray();
 			}
 
-			var matcher = CreateMatcher(pattern);
-
-			return keys.Where(x => matcher.IsMatch(x)).ToArray();
+			var wildcard = new Wildcard(pattern, RegexOptions.IgnoreCase);
+			return keys.Where(x => wildcard.IsMatch(x));
 		}
 
-		public void RemoveByPattern(string pattern)
+		public int RemoveByPattern(string pattern)
         {
             var keysToRemove = Keys(pattern);
+			int count = 0;
 
 			lock (_cache)
 			{
@@ -111,18 +149,22 @@ namespace SmartStore.Core.Caching
 				foreach (string key in keysToRemove)
 				{
 					_cache.Remove(key);
+					count++;
 				}
 			}
-        }
+
+			return count;
+		}
 
         public void Clear()
         {
 			RemoveByPattern("*");
         }
 
-		private static Regex CreateMatcher(string pattern)
+		public virtual ISet GetHashSet(string key)
 		{
-			return new Regex(pattern, RegexOptions.Singleline | RegexOptions.Compiled | RegexOptions.IgnoreCase);
+			var set = Get(key, () => new MemorySet(this));
+			return set;
 		}
 
 		private CacheItemPolicy GetCacheItemPolicy(TimeSpan? duration)

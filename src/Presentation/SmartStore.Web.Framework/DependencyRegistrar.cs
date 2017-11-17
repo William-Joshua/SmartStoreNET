@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Web;
+using System.Web.Hosting;
 using System.Web.Mvc;
 using Autofac;
 using Autofac.Builder;
@@ -11,6 +12,7 @@ using Autofac.Integration.Mvc;
 using Autofac.Integration.WebApi;
 using SmartStore.ComponentModel;
 using SmartStore.Core;
+using SmartStore.Core.Async;
 using SmartStore.Core.Caching;
 using SmartStore.Core.Configuration;
 using SmartStore.Core.Data;
@@ -21,43 +23,52 @@ using SmartStore.Core.Events;
 using SmartStore.Core.Fakes;
 using SmartStore.Core.Infrastructure;
 using SmartStore.Core.Infrastructure.DependencyManagement;
-using SmartStore.Core.IO.Media;
-using SmartStore.Core.IO.VirtualPath;
-using SmartStore.Core.IO.WebSite;
+using SmartStore.Core.IO;
 using SmartStore.Core.Localization;
 using SmartStore.Core.Logging;
 using SmartStore.Core.Packaging;
 using SmartStore.Core.Plugins;
+using SmartStore.Core.Search;
 using SmartStore.Core.Themes;
 using SmartStore.Data;
+using SmartStore.Data.Caching;
 using SmartStore.Services;
 using SmartStore.Services.Affiliates;
 using SmartStore.Services.Authentication;
 using SmartStore.Services.Authentication.External;
 using SmartStore.Services.Blogs;
 using SmartStore.Services.Catalog;
+using SmartStore.Services.Catalog.Extensions;
+using SmartStore.Services.Catalog.Importer;
+using SmartStore.Services.Catalog.Modelling;
 using SmartStore.Services.Cms;
 using SmartStore.Services.Common;
 using SmartStore.Services.Configuration;
 using SmartStore.Services.Customers;
+using SmartStore.Services.Customers.Importer;
 using SmartStore.Services.DataExchange;
 using SmartStore.Services.DataExchange.Export;
 using SmartStore.Services.DataExchange.Import;
 using SmartStore.Services.Directory;
 using SmartStore.Services.Discounts;
 using SmartStore.Services.Events;
-using SmartStore.Services.Filter;
 using SmartStore.Services.Forums;
 using SmartStore.Services.Helpers;
 using SmartStore.Services.Localization;
 using SmartStore.Services.Logging;
 using SmartStore.Services.Media;
+using SmartStore.Services.Media.Storage;
 using SmartStore.Services.Messages;
+using SmartStore.Services.Messages.Importer;
 using SmartStore.Services.News;
 using SmartStore.Services.Orders;
 using SmartStore.Services.Payments;
 using SmartStore.Services.Pdf;
 using SmartStore.Services.Polls;
+using SmartStore.Services.Search;
+using SmartStore.Services.Search.Extensions;
+using SmartStore.Services.Search.Modelling;
+using SmartStore.Services.Search.Rendering;
 using SmartStore.Services.Security;
 using SmartStore.Services.Seo;
 using SmartStore.Services.Shipping;
@@ -73,13 +84,11 @@ using SmartStore.Web.Framework.Localization;
 using SmartStore.Web.Framework.Plugins;
 using SmartStore.Web.Framework.Routing;
 using SmartStore.Web.Framework.Theming;
+using SmartStore.Web.Framework.Theming.Assets;
 using SmartStore.Web.Framework.UI;
 using SmartStore.Web.Framework.WebApi;
 using SmartStore.Web.Framework.WebApi.Configuration;
 using Module = Autofac.Module;
-using SmartStore.Services.Catalog.Importer;
-using SmartStore.Services.Customers.Importer;
-using SmartStore.Services.Messages.Importer;
 
 namespace SmartStore.Web.Framework
 {
@@ -96,8 +105,8 @@ namespace SmartStore.Web.Framework
 			builder.RegisterModule(new CoreModule(typeFinder));
 			builder.RegisterModule(new DbModule(typeFinder));
 			builder.RegisterModule(new CachingModule());
+			builder.RegisterModule(new SearchModule());
 			builder.RegisterModule(new LocalizationModule());
-			builder.RegisterModule(new LoggingModule());
 			builder.RegisterModule(new EventModule(typeFinder, pluginFinder));
 			builder.RegisterModule(new MessagingModule());
 			builder.RegisterModule(new WebModule(typeFinder));
@@ -129,8 +138,17 @@ namespace SmartStore.Web.Framework
 
 		protected override void Load(ContainerBuilder builder)
 		{
+			builder.RegisterType<ApplicationEnvironment>().As<IApplicationEnvironment>().SingleInstance();
+
 			// sources
+			builder.RegisterGeneric(typeof(WorkValues<>)).InstancePerRequest();
 			builder.RegisterSource(new SettingsSource());
+			builder.RegisterSource(new WorkSource());
+
+			// Logging stuff
+			builder.RegisterType<Notifier>().As<INotifier>().InstancePerRequest();
+			builder.RegisterType<DbLogService>().As<ILogService>().InstancePerRequest();
+			builder.RegisterType<CustomerActivityService>().As<ICustomerActivityService>().InstancePerRequest();
 
 			// web helper
 			builder.RegisterType<WebHelper>().As<IWebHelper>().InstancePerRequest();
@@ -164,11 +182,12 @@ namespace SmartStore.Web.Framework
 			builder.RegisterType<CategoryTemplateService>().As<ICategoryTemplateService>().InstancePerRequest();
 			builder.RegisterType<ManufacturerTemplateService>().As<IManufacturerTemplateService>().InstancePerRequest();
 			builder.RegisterType<ProductTagService>().As<IProductTagService>().InstancePerRequest();
+			builder.RegisterType<ProductVariantQueryFactory>().As<IProductVariantQueryFactory>().InstancePerRequest();
+			builder.RegisterType<ProductUrlHelper>().InstancePerRequest();
 
 			builder.RegisterType<AffiliateService>().As<IAffiliateService>().InstancePerRequest();
 			builder.RegisterType<AddressService>().As<IAddressService>().InstancePerRequest();
 			builder.RegisterType<GenericAttributeService>().As<IGenericAttributeService>().InstancePerRequest();
-			builder.RegisterType<FulltextService>().As<IFulltextService>().InstancePerRequest();
 			builder.RegisterType<MaintenanceService>().As<IMaintenanceService>().InstancePerRequest();
 
 			builder.RegisterType<CustomerContentService>().As<ICustomerContentService>().InstancePerRequest();
@@ -198,8 +217,9 @@ namespace SmartStore.Web.Framework
 
 			builder.RegisterType<DownloadService>().As<IDownloadService>().InstancePerRequest();
 			builder.RegisterType<ImageCache>().As<IImageCache>().InstancePerRequest();
-			builder.RegisterType<ImageResizerService>().As<IImageResizerService>().SingleInstance();
+			builder.RegisterType<DefaultImageProcessor>().As<IImageProcessor>().InstancePerRequest();
 			builder.RegisterType<PictureService>().As<IPictureService>().InstancePerRequest();
+			builder.RegisterType<MediaMover>().As<IMediaMover>().InstancePerRequest();
 
 			builder.RegisterType<CheckoutAttributeFormatter>().As<ICheckoutAttributeFormatter>().InstancePerRequest();
 			builder.RegisterType<CheckoutAttributeParser>().As<ICheckoutAttributeParser>().InstancePerRequest();
@@ -233,7 +253,7 @@ namespace SmartStore.Web.Framework
 			builder.RegisterType<NewsService>().As<INewsService>().InstancePerRequest();
 
 			builder.RegisterType<DateTimeHelper>().As<IDateTimeHelper>().InstancePerRequest();
-			builder.RegisterType<SitemapGenerator>().As<ISitemapGenerator>().InstancePerRequest();
+			builder.RegisterType<XmlSitemapGenerator>().As<IXmlSitemapGenerator>().InstancePerRequest();
 			builder.RegisterType<PageAssetsBuilder>().As<IPageAssetsBuilder>().InstancePerRequest();
 
 			builder.RegisterType<ScheduleTaskService>().As<IScheduleTaskService>().InstancePerRequest();
@@ -246,7 +266,6 @@ namespace SmartStore.Web.Framework
 			builder.RegisterType<ExternalAuthorizer>().As<IExternalAuthorizer>().InstancePerRequest();
 			builder.RegisterType<OpenAuthenticationService>().As<IOpenAuthenticationService>().InstancePerRequest();
 
-			builder.RegisterType<FilterService>().As<IFilterService>().InstancePerRequest();
 			builder.RegisterType<CommonServices>().As<ICommonServices>().InstancePerRequest();
 		}
 
@@ -258,14 +277,15 @@ namespace SmartStore.Web.Framework
 			if (servicesProperty == null)
 				return;
 
-			var fastProperty = new FastProperty(servicesProperty);
+			registration.Metadata.Add("Property.ICommonServices", new FastProperty(servicesProperty));
 
 			registration.Activated += (sender, e) =>
 			{
 				if (DataSettings.DatabaseIsInstalled())
 				{
+					var prop = e.Component.Metadata.Get("Property.ICommonServices") as FastProperty;
 					var services = e.Context.Resolve<ICommonServices>();
-					fastProperty.SetValue(e.Instance, services);
+					prop.SetValue(e.Instance, services);
 				}
 			};
 		}
@@ -337,7 +357,11 @@ namespace SmartStore.Web.Framework
 			builder.Register(x => x.Resolve<DataProviderFactory>().LoadDataProvider()).As<IDataProvider>().InstancePerDependency();
 			builder.Register(x => (IEfDataProvider)x.Resolve<DataProviderFactory>().LoadDataProvider()).As<IEfDataProvider>().InstancePerDependency();
 
-			if (DataSettings.Current.IsValid())
+			builder.RegisterType<DefaultDbHookHandler>().As<IDbHookHandler>().InstancePerRequest();
+
+			builder.RegisterType<EfDbCache>().As<IDbCache>().SingleInstance();
+
+			if (DataSettings.DatabaseIsInstalled())
 			{
 				// register DB Hooks (only when app was installed properly)
 
@@ -353,31 +377,36 @@ namespace SmartStore.Web.Framework
 						x = x.BaseType;
 					}
 
-					return typeof(object);
+					return typeof(BaseEntity);
 				};
 
-				var hooks = _typeFinder.FindClassesOfType<IHook>(ignoreInactivePlugins: true);
+				var hooks = _typeFinder.FindClassesOfType<IDbHook>(ignoreInactivePlugins: true);
 				foreach (var hook in hooks)
 				{
 					var hookedType = findHookedType(hook);
 
 					var registration = builder.RegisterType(hook)
-						.As(typeof(IPreActionHook).IsAssignableFrom(hook) ? typeof(IPreActionHook) : typeof(IPostActionHook))
-						.InstancePerRequest();
-
-					registration.WithMetadata<HookMetadata>(m => 
-					{ 
-						m.For(em => em.HookedType, hookedType); 
-					});
+						.As<IDbHook>()
+						.InstancePerRequest()
+						.WithMetadata<HookMetadata>(m =>
+						{
+							m.For(em => em.HookedType, hookedType);
+							m.For(em => em.ImplType, hook);
+							m.For(em => em.IsLoadHook, typeof(IDbLoadHook).IsAssignableFrom(hook));
+							m.For(em => em.Important, hook.HasAttribute<ImportantAttribute>(false));
+						});
 				}
 
 				builder.Register<IDbContext>(c => new SmartObjectContext(DataSettings.Current.DataConnectionString))
-					.PropertiesAutowired(PropertyWiringOptions.None)
+					//.PropertiesAutowired(PropertyWiringOptions.AllowCircularDependencies)
+					.PropertiesAutowired(new DbContextPropertySelector(), false)
 					.InstancePerRequest();
 			}
 			else
 			{
-				builder.Register<IDbContext>(c => new SmartObjectContext(DataSettings.Current.DataConnectionString)).InstancePerRequest();
+				builder.Register<IDbContext>(c => new SmartObjectContext(DataSettings.Current.DataConnectionString))
+					.PropertiesAutowired(PropertyWiringOptions.AllowCircularDependencies)
+					.InstancePerRequest();
 			}
 
 			builder.Register<Func<string, IDbContext>>(c =>
@@ -405,14 +434,18 @@ namespace SmartStore.Web.Framework
 			if (querySettingsProperty == null)
 				return;
 
-			var fastProperty = new FastProperty(querySettingsProperty);
+			registration.Metadata.Add("Property.DbQuerySettings", new FastProperty(querySettingsProperty));
 
 			registration.Activated += (sender, e) =>
 			{
 				if (DataSettings.DatabaseIsInstalled())
 				{
-					var querySettings = e.Context.Resolve<DbQuerySettings>();
-					fastProperty.SetValue(e.Instance, querySettings);
+					var prop = e.Component.Metadata.Get("Property.DbQuerySettings") as FastProperty;
+					if (prop != null)
+					{
+						var querySettings = e.Context.Resolve<DbQuerySettings>();
+						prop.SetValue(e.Instance, querySettings);
+					}
 				}
 			};
 		}
@@ -421,65 +454,13 @@ namespace SmartStore.Web.Framework
 		{
 			return type.GetProperty("QuerySettings", typeof(DbQuerySettings));
 		}
-	}
 
-	public class LoggingModule : Module
-	{
-		protected override void Load(ContainerBuilder builder)
+		private class DbContextPropertySelector : IPropertySelector
 		{
-			builder.RegisterType<Notifier>().As<INotifier>().InstancePerRequest();
-			builder.RegisterType<DefaultLogger>().As<ILogger>().InstancePerRequest();
-			builder.RegisterType<CustomerActivityService>().As<ICustomerActivityService>().InstancePerRequest();
-		}
-
-		protected override void AttachToComponentRegistration(IComponentRegistry componentRegistry, IComponentRegistration registration)
-		{
-			if (!DataSettings.DatabaseIsInstalled())
-				return;
-			
-			var implementationType = registration.Activator.LimitType;
-
-			// build an array of actions on this type to assign loggers to member properties
-			var injectors = BuildLoggerInjectors(implementationType).ToArray();
-
-			// if there are no logger properties, there's no reason to hook the activated event
-			if (!injectors.Any())
-				return;
-
-			// otherwise, whan an instance of this component is activated, inject the loggers on the instance
-			registration.Activated += (s, e) =>
+			public bool InjectProperty(PropertyInfo propertyInfo, object instance)
 			{
-				foreach (var injector in injectors)
-					injector(e.Context, e.Instance);
-			};
-		}
-
-		private IEnumerable<Action<IComponentContext, object>> BuildLoggerInjectors(Type componentType)
-		{
-			// Look for settable properties of type "ILogger" 
-			var loggerProperties = componentType
-				.GetProperties(BindingFlags.SetProperty | BindingFlags.Public | BindingFlags.Instance)
-				.Select(p => new
-				{
-					PropertyInfo = p,
-					p.PropertyType,
-					IndexParameters = p.GetIndexParameters(),
-					Accessors = p.GetAccessors(false)
-				})
-				.Where(x => x.PropertyType == typeof(ILogger)) // must be a logger
-				.Where(x => x.IndexParameters.Count() == 0) // must not be an indexer
-				.Where(x => x.Accessors.Length != 1 || x.Accessors[0].ReturnType == typeof(void)) //must have get/set, or only set
-				.Select(x => new FastProperty(x.PropertyInfo));
-
-			// Return an array of actions that resolve a logger and assign the property
-			foreach (var prop in loggerProperties)
-			{
-				yield return (ctx, instance) =>
-				{
-					string component = componentType.ToString();
-					var logger = ctx.Resolve<ILogger>();
-					prop.SetValue(instance, logger);
-				};
+				// Prevent Autofac circularity exception & never trigger hooks during tooling or tests
+				return HostingEnvironment.IsHosted && typeof(IDbHookHandler).IsAssignableFrom(propertyInfo.PropertyType);
 			}
 		}
 	}
@@ -505,14 +486,22 @@ namespace SmartStore.Web.Framework
 			if (userProperty == null)
 				return;
 
-			var fastProperty = new FastProperty(userProperty);
+			registration.Metadata.Add("Property.T", new FastProperty(userProperty));
 
 			registration.Activated += (sender, e) =>
 			{
-				if (DataSettings.DatabaseIsInstalled())
+				if (DataSettings.DatabaseIsInstalled() && e.Context.Resolve<IEngine>().IsFullyInitialized)
 				{
-					Localizer localizer = e.Context.Resolve<IText>().Get;
-					fastProperty.SetValue(e.Instance, localizer);
+					var prop = e.Component.Metadata.Get("Property.T") as FastProperty;
+					if (prop != null)
+					{
+						try
+						{
+							Localizer localizer = e.Context.Resolve<IText>().Get;
+							prop.SetValue(e.Instance, localizer);
+						}
+						catch { }
+					}
 				}
 			};
 		}
@@ -529,6 +518,8 @@ namespace SmartStore.Web.Framework
 		{
 			// Output cache
 			builder.RegisterType<DisplayControl>().As<IDisplayControl>().InstancePerRequest();
+			builder.Register<IOutputCacheInvalidationObserver>(c => NullOutputCacheInvalidationObserver.Instance).SingleInstance();
+			builder.RegisterType<NullCacheableRouteRegistrar>().As<ICacheableRouteRegistrar>().InstancePerRequest();
 
 			// Request cache
 			builder.RegisterType<RequestCache>().As<IRequestCache>().InstancePerRequest();
@@ -536,6 +527,34 @@ namespace SmartStore.Web.Framework
 			// Model/Business cache (application scoped)
 			builder.RegisterType<MemoryCacheManager>().As<ICacheManager>().SingleInstance();
 			builder.RegisterType<NullCache>().Named<ICacheManager>("null").SingleInstance();
+
+			// Register MemoryCacheManager twice, this time explicitly named.
+			// We may need this later in decorator classes as a kind of fallback.
+			builder.RegisterType<MemoryCacheManager>().Named<ICacheManager>("memory").SingleInstance();
+
+			// Asset cache
+			if (DataSettings.DatabaseIsInstalled())
+			{
+				builder.RegisterType<DefaultAssetCache>().As<IAssetCache>().InstancePerRequest();
+			}
+			else
+			{
+				builder.Register<IAssetCache>(c => DefaultAssetCache.Null).SingleInstance();
+			}
+		}
+	}
+
+	public class SearchModule : Module
+	{
+		protected override void Load(ContainerBuilder builder)
+		{
+			builder.RegisterType<DefaultIndexManager>().As<IIndexManager>().InstancePerRequest();
+			builder.RegisterType<CatalogSearchService>().As<ICatalogSearchService>().InstancePerRequest();
+			builder.RegisterType<LinqCatalogSearchService>().Named<ICatalogSearchService>("linq").InstancePerRequest();
+			builder.RegisterType<CatalogSearchQueryFactory>().As<ICatalogSearchQueryFactory>().InstancePerRequest();
+			builder.RegisterType<CatalogSearchQueryAliasMapper>().As<ICatalogSearchQueryAliasMapper>().InstancePerRequest();
+			builder.RegisterType<FacetUrlHelper>().InstancePerRequest();
+			builder.RegisterType<FacetTemplateProvider>().As<IFacetTemplateProvider>().InstancePerRequest();
 		}
 	}
 
@@ -552,6 +571,8 @@ namespace SmartStore.Web.Framework
 
 		protected override void Load(ContainerBuilder builder)
 		{
+			builder.RegisterType<DefaultMessageBus>().As<IMessageBus>().SingleInstance();
+
 			builder.RegisterType<EventPublisher>().As<IEventPublisher>().SingleInstance();
 			builder.RegisterGeneric(typeof(DefaultConsumerFactory<>)).As(typeof(IConsumerFactory<>)).InstancePerDependency();
 
@@ -598,7 +619,8 @@ namespace SmartStore.Web.Framework
 			builder.RegisterType<WorkflowMessageService>().As<IWorkflowMessageService>().InstancePerRequest();
 			builder.RegisterType<MessageTokenProvider>().As<IMessageTokenProvider>().InstancePerRequest();
 			builder.RegisterType<Tokenizer>().As<ITokenizer>().InstancePerRequest();
-			builder.RegisterType<DefaultEmailSender>().As<IEmailSender>().SingleInstance(); // xxx (http)
+			builder.RegisterType<DefaultEmailSender>().As<IEmailSender>().InstancePerRequest();
+			builder.RegisterType<LocalAsyncState>().As<IAsyncState>().SingleInstance();
 		}
 	}
 
@@ -626,12 +648,20 @@ namespace SmartStore.Web.Framework
 			builder.RegisterType<BundleBuilder>().As<IBundleBuilder>().InstancePerRequest();
 			builder.RegisterType<FileDownloadManager>().InstancePerRequest();
 
+			// Filter provider
 			builder.RegisterFilterProvider();
+
+			// Model binding
+			builder.RegisterModelBinders(foundAssemblies);
+			builder.RegisterModelBinderProvider();
+
+			var pageHelperRegistration = builder.RegisterType<WebViewPageHelper>().InstancePerRequest();
 
 			// global exception handling
 			if (DataSettings.DatabaseIsInstalled())
 			{
-				builder.RegisterType<HandleExceptionFilter>().AsActionFilterFor<Controller>();
+				pageHelperRegistration.PropertiesAutowired(PropertyWiringOptions.None);
+				builder.RegisterType<HandleExceptionFilter>().AsActionFilterFor<Controller>(-100);
 			}
 		}
 
@@ -746,8 +776,8 @@ namespace SmartStore.Web.Framework
 		protected override void Load(ContainerBuilder builder)
 		{
 			// register theming services
-			builder.Register<DefaultThemeRegistry>(x => new DefaultThemeRegistry(x.Resolve<IEventPublisher>(), null, null, true)).As<IThemeRegistry>().SingleInstance();
-			builder.RegisterType<ThemeFileResolver>().As<IThemeFileResolver>().SingleInstance();
+			builder.Register(x => new DefaultThemeRegistry(x.Resolve<IEventPublisher>(), x.Resolve<IApplicationEnvironment>(), null, null, true)).As<IThemeRegistry>().SingleInstance();
+			builder.RegisterType<DefaultThemeFileResolver>().As<IThemeFileResolver>().SingleInstance();
 
 			builder.RegisterType<ThemeContext>().As<IThemeContext>().InstancePerRequest();
 			builder.RegisterType<ThemeVariablesService>().As<IThemeVariablesService>().InstancePerRequest();
@@ -759,6 +789,16 @@ namespace SmartStore.Web.Framework
 
 			builder.RegisterType<WidgetProvider>().As<IWidgetProvider>().InstancePerRequest();
 			builder.RegisterType<MenuPublisher>().As<IMenuPublisher>().InstancePerRequest();
+			builder.RegisterType<DefaultBreadcrumb>().As<IBreadcrumb>().InstancePerRequest();
+
+			// Sitemaps
+			builder.RegisterType<SiteMapService>().As<ISiteMapService>().InstancePerRequest();
+
+			var siteMapTypes = _typeFinder.FindClassesOfType<ISiteMap>(ignoreInactivePlugins: true);
+			foreach (var type in siteMapTypes)
+			{
+				builder.RegisterType(type).As<ISiteMap>().PropertiesAutowired(PropertyWiringOptions.None).InstancePerRequest();
+			}
 		}
 	}
 
@@ -766,9 +806,16 @@ namespace SmartStore.Web.Framework
 	{
 		protected override void Load(ContainerBuilder builder)
 		{
-			builder.RegisterType<FileSystemStorageProvider>().As<IStorageProvider>().InstancePerRequest();
-			builder.RegisterType<DefaultVirtualPathProvider>().As<IVirtualPathProvider>().InstancePerRequest();
-			builder.RegisterType<WebSiteFolder>().As<IWebSiteFolder>().InstancePerRequest();
+			builder.RegisterType<LocalFileSystem>().As<IFileSystem>().SingleInstance();
+			builder.RegisterType<MediaFileSystem>().As<IMediaFileSystem>().SingleInstance();
+
+			// Register IFileSystem twice, this time explicitly named.
+			// We may need this later in decorator classes as a kind of fallback.
+			builder.RegisterType<LocalFileSystem>().Named<IFileSystem>("local").SingleInstance();
+			builder.RegisterType<MediaFileSystem>().Named<IMediaFileSystem>("local").SingleInstance();
+
+			builder.RegisterType<DefaultVirtualPathProvider>().As<IVirtualPathProvider>().SingleInstance();
+			builder.RegisterType<LockFileManager>().As<ILockFileManager>().SingleInstance();
 		}
 	}
 
@@ -846,6 +893,7 @@ namespace SmartStore.Web.Framework
 				RegisterAsSpecificProvider<IPaymentMethod>(type, systemName, registration);
 				RegisterAsSpecificProvider<IExportProvider>(type, systemName, registration);
 				RegisterAsSpecificProvider<IOutputCacheProvider>(type, systemName, registration);
+				RegisterAsSpecificProvider<IMediaStorageProvider>(type, systemName, registration);
 			}
 
 		}
@@ -1084,14 +1132,13 @@ namespace SmartStore.Web.Framework
 				return keyed => cc.ResolveKeyed<IEntityImporter>(keyed);
 			});
 		}
-
 	}
 
 	#endregion
 
 	#region Sources
 
-	public class SettingsSource : IRegistrationSource
+	class SettingsSource : IRegistrationSource
     {
         static readonly MethodInfo BuildMethod = typeof(SettingsSource).GetMethod(
             "BuildRegistration",
@@ -1116,23 +1163,33 @@ namespace SmartStore.Web.Framework
 				{
 					int currentStoreId = 0;
 					IStoreContext storeContext;
-					if (c.TryResolve<IStoreContext>(out storeContext))
+
+					try
 					{
-						var store = storeContext.CurrentStore;
+						if (c.TryResolve(out storeContext))
+						{
+							currentStoreId = storeContext.CurrentStore.Id;
+							//uncomment the code below if you want load settings per store only when you have two stores installed.
+							//var currentStoreId = c.Resolve<IStoreService>().GetAllStores().Count > 1
+							//    c.Resolve<IStoreContext>().CurrentStore.Id : 0;
 
-						currentStoreId = store.Id;
-						//uncomment the code below if you want load settings per store only when you have two stores installed.
-						//var currentStoreId = c.Resolve<IStoreService>().GetAllStores().Count > 1
-						//    c.Resolve<IStoreContext>().CurrentStore.Id : 0;
+							////although it's better to connect to your database and execute the following SQL:
+							//DELETE FROM [Setting] WHERE [StoreId] > 0
 
-						////although it's better to connect to your database and execute the following SQL:
-						//DELETE FROM [Setting] WHERE [StoreId] > 0
+							//return c.Resolve<ISettingService>().LoadSetting<TSettings>(currentStoreId);
+						}
+					}
+					catch { }
 
+					try
+					{
 						return c.Resolve<ISettingService>().LoadSetting<TSettings>(currentStoreId);
 					}
-
-					// Unit tests
-					return new TSettings();
+					catch
+					{
+						// Unit tests & tooling
+						return new TSettings();
+					}
 				})
                 .InstancePerRequest()
                 .CreateRegistration();
@@ -1140,6 +1197,84 @@ namespace SmartStore.Web.Framework
 
         public bool IsAdapterForIndividualComponents { get { return false; } }
     }
+
+	class WorkSource : IRegistrationSource
+	{
+		static readonly MethodInfo CreateMetaRegistrationMethod = typeof(WorkSource).GetMethod(
+			"CreateMetaRegistration", BindingFlags.Static | BindingFlags.NonPublic);
+
+		private static bool IsClosingTypeOf(Type type, Type openGenericType)
+		{
+			return type.IsGenericType && type.GetGenericTypeDefinition() == openGenericType;
+		}
+
+		public IEnumerable<IComponentRegistration> RegistrationsFor(Service service, Func<Service, IEnumerable<IComponentRegistration>> registrationAccessor)
+		{
+			var swt = service as IServiceWithType;
+			if (swt == null || !IsClosingTypeOf(swt.ServiceType, typeof(Work<>)))
+				return Enumerable.Empty<IComponentRegistration>();
+
+			var valueType = swt.ServiceType.GetGenericArguments()[0];
+
+			var valueService = swt.ChangeType(valueType);
+
+			var registrationCreator = CreateMetaRegistrationMethod.MakeGenericMethod(valueType);
+
+			return registrationAccessor(valueService)
+				.Select(v => registrationCreator.Invoke(null, new object[] { service, v }))
+				.Cast<IComponentRegistration>();
+		}
+
+		public bool IsAdapterForIndividualComponents
+		{
+			get { return true; }
+		}
+
+		static IComponentRegistration CreateMetaRegistration<T>(Service providedService, IComponentRegistration valueRegistration) where T : class
+		{
+			var rb = RegistrationBuilder.ForDelegate(
+				(c, p) => {
+					var accessor = c.Resolve<ILifetimeScopeAccessor>();
+					return new Work<T>(w => 
+					{
+						var scope = accessor.GetLifetimeScope(null);
+						if (scope == null)
+							return default(T);
+
+						var workValues = scope.Resolve<WorkValues<T>>();
+
+						T value;
+						if (!workValues.Values.TryGetValue(w, out value))
+						{
+							value = (T)workValues.ComponentContext.ResolveComponent(valueRegistration, p);
+							workValues.Values[w] = value;
+						}
+
+						return value;
+
+						////T value = default(T); // accessor.GetLifetimeScope(null).Resolve<T>();
+						//return accessor.GetLifetimeScope(null).Resolve<T>();
+					});
+				})
+				.As(providedService)
+				.Targeting(valueRegistration)
+				.SingleInstance();
+
+			return rb.CreateRegistration();
+		}
+	}
+
+	class WorkValues<T> where T : class
+	{
+		public WorkValues(IComponentContext componentContext)
+		{
+			ComponentContext = componentContext;
+			Values = new Dictionary<Work<T>, T>();
+		}
+
+		public IComponentContext ComponentContext { get; private set; }
+		public IDictionary<Work<T>, T> Values { get; private set; }
+	}
 
 	#endregion
 

@@ -15,32 +15,33 @@ using SmartStore.Services.Customers;
 
 namespace SmartStore.Services.Tasks
 {
-
 	public class TaskExecutor : ITaskExecutor
     {
         private readonly IScheduleTaskService _scheduledTaskService;
 		private readonly IDbContext _dbContext;
-		private readonly ICustomerService _customerService;
 		private readonly IWorkContext _workContext;
         private readonly Func<Type, ITask> _taskResolver;
 		private readonly IComponentContext _componentContext;
+		private readonly IAsyncState _asyncState;
 
-        public const string CurrentCustomerIdParamName = "CurrentCustomerId";
+		public const string CurrentCustomerIdParamName = "CurrentCustomerId";
+		public const string CurrentStoreIdParamName = "CurrentStoreId";
 
-        public TaskExecutor(
+		public TaskExecutor(
 			IScheduleTaskService scheduledTaskService, 
 			IDbContext dbContext,
  			ICustomerService customerService,
 			IWorkContext workContext,
-			IComponentContext componentContext, 
+			IComponentContext componentContext,
+			IAsyncState asyncState,
 			Func<Type, ITask> taskResolver)
         {
-            this._scheduledTaskService = scheduledTaskService;
-			this._dbContext = dbContext;
-			this._customerService = customerService;
-			this._workContext = workContext;
-			this._componentContext = componentContext;
-            this._taskResolver = taskResolver;
+            _scheduledTaskService = scheduledTaskService;
+			_dbContext = dbContext;
+			_workContext = workContext;
+			_componentContext = componentContext;
+			_asyncState = asyncState;
+            _taskResolver = taskResolver;
 
             Logger = NullLogger.Instance;
 			T = NullLocalizer.Instance;
@@ -72,7 +73,10 @@ namespace SmartStore.Services.Tasks
 			{
 				taskType = Type.GetType(task.Type);
 
-				Debug.WriteLineIf(taskType == null, "Invalid task type: " + task.Type.NaIfEmpty());
+				if (taskType == null)
+				{
+					Logger.DebugFormat("Invalid scheduled task type: {0}", task.Type.NaIfEmpty());
+				}
 
 				if (taskType == null)
 					return;
@@ -87,22 +91,6 @@ namespace SmartStore.Services.Tasks
 
             try
             {
-                Customer customer = null;
-                
-                // try virtualize current customer (which is necessary when user manually executes a task)
-                if (taskParameters != null && taskParameters.ContainsKey(CurrentCustomerIdParamName))
-                {
-                    customer = _customerService.GetCustomerById(taskParameters[CurrentCustomerIdParamName].ToInt());
-                }
-                
-                if (customer == null)
-                {
-                    // no virtualization: set background task system customer as current customer
-                    customer = _customerService.GetCustomerBySystemName(SystemCustomerNames.BackgroundTask);
-                }
-				
-				_workContext.CurrentCustomer = customer;
-
 				// create task instance
 				instance = _taskResolver(taskType);
 				stateName = task.Id.ToString();
@@ -118,7 +106,7 @@ namespace SmartStore.Services.Tasks
 
 				// create & set a composite CancellationTokenSource which also contains the global app shoutdown token
 				var cts = CancellationTokenSource.CreateLinkedTokenSource(AsyncRunner.AppShutdownCancellationToken, new CancellationTokenSource().Token);
-				AsyncState.Current.SetCancelTokenSource<ScheduleTask>(cts, stateName);
+				_asyncState.SetCancelTokenSource<ScheduleTask>(cts, stateName);
 
 				var ctx = new TaskExecutionContext(_componentContext, task)
 				{
@@ -127,7 +115,8 @@ namespace SmartStore.Services.Tasks
 					Parameters = taskParameters ?? new Dictionary<string, string>()
 				};
 
-                instance.Execute(ctx);
+				Logger.DebugFormat("Executing scheduled task: {0}", task.Type);
+				instance.Execute(ctx);
             }
             catch (Exception exception)
             {
@@ -136,9 +125,9 @@ namespace SmartStore.Services.Tasks
 				lastError = exception.Message.Truncate(995, "...");
 
 				if (canceled)
-					Logger.Warning(T("Admin.System.ScheduleTasks.Cancellation", task.Name), exception);
+					Logger.Warn(exception, T("Admin.System.ScheduleTasks.Cancellation", task.Name));
 				else
-					Logger.Error(string.Concat(T("Admin.System.ScheduleTasks.RunningError", task.Name), ": ", exception.Message), exception);
+					Logger.Error(exception, string.Concat(T("Admin.System.ScheduleTasks.RunningError", task.Name), ": ", exception.Message));
 
                 if (throwOnError)
                 {
@@ -147,19 +136,13 @@ namespace SmartStore.Services.Tasks
             }
             finally
             {
-				// remove from AsyncState
-				if (stateName.HasValue())
-				{
-					AsyncState.Current.Remove<ScheduleTask>(stateName);
-				}
-
 				task.ProgressPercent = null;
 				task.ProgressMessage = null;
 
 				var now = DateTime.UtcNow;
 				task.LastError = lastError;
 				task.LastEndUtc = now;
-
+				
 				if (faulted)
 				{
 					if ((!canceled && task.StopOnError) || instance == null)
@@ -172,19 +155,21 @@ namespace SmartStore.Services.Tasks
 					task.LastSuccessUtc = now;
 				}
 
+				Logger.DebugFormat("Executed scheduled task: {0}. Elapsed: {1} ms.", task.Type, (now - task.LastStartUtc.Value).TotalMilliseconds);
+
 				if (task.Enabled)
 				{
 					task.NextRunUtc = _scheduledTaskService.GetNextSchedule(task);
 				}
 
+				// remove from AsyncState
+				if (stateName.HasValue())
+				{
+					_asyncState.Remove<ScheduleTask>(stateName);
+				}
+
 				_scheduledTaskService.UpdateTask(task);
             }
         }
-
-		private CancellationTokenSource CreateCompositeCancellationTokenSource(CancellationToken userCancellationToken)
-		{
-			return CancellationTokenSource.CreateLinkedTokenSource(AsyncRunner.AppShutdownCancellationToken, userCancellationToken);
-		}
     }
-
 }

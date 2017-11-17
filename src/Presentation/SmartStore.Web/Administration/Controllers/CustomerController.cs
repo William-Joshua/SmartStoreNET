@@ -223,7 +223,7 @@ namespace SmartStore.Admin.Controllers
         [NonAction]
         protected CustomerModel PrepareCustomerModelForList(Customer customer)
         {
-            return new CustomerModel()
+            return new CustomerModel
             {
                 Id = customer.Id,
                 Email = !String.IsNullOrEmpty(customer.Email) ? customer.Email : (customer.IsGuest() ? _localizationService.GetResource("Admin.Customers.Guest") : "".NaIfEmpty()),
@@ -259,10 +259,10 @@ namespace SmartStore.Admin.Controllers
 				.Select(cr => cr.ToModel())
 				.ToList();
 
-			if (model.SelectedCustomerRoleIds == null)
+			if (model.SelectedCustomerRoleIds == null || model.SelectedCustomerRoleIds.Count() == 0)
 			{
-				model.SelectedCustomerRoleIds = new int[0];
-			}
+                model.SelectedCustomerRoleIds = new int[] { 3 };      // 3 = CustomerRole > registered 
+            }
 
 			model.AllowManagingCustomerRoles = _permissionService.Authorize(StandardPermissionProvider.ManageCustomerRoles);
 			//form fields
@@ -491,7 +491,7 @@ namespace SmartStore.Admin.Controllers
             
             if (ModelState.IsValid)
             {
-                var customer = new Customer()
+                var customer = new Customer
                 {
                     CustomerGuid = Guid.NewGuid(),
                     Email = model.Email,

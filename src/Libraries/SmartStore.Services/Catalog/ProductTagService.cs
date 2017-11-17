@@ -24,12 +24,12 @@ namespace SmartStore.Services.Catalog
 		/// <remarks>
 		/// {0} : store ID
 		/// </remarks>
-		private const string PRODUCTTAG_COUNT_KEY = "sm.producttag.count-{0}";
+		private const string PRODUCTTAG_COUNT_KEY = "producttag:count-{0}";
 
 		/// <summary>
 		/// Key pattern to clear cache
 		/// </summary>
-		private const string PRODUCTTAG_PATTERN_KEY = "sm.producttag.";
+		private const string PRODUCTTAG_PATTERN_KEY = "producttag:*";
 
 		#endregion
 
@@ -154,9 +154,6 @@ namespace SmartStore.Services.Catalog
 
 			//cache
 			_cacheManager.RemoveByPattern(PRODUCTTAG_PATTERN_KEY);
-
-            //event notification
-            _eventPublisher.EntityDeleted(productTag);
         }
 
         /// <summary>
@@ -222,11 +219,7 @@ namespace SmartStore.Services.Catalog
 
             _productTagRepository.Insert(productTag);
 
-			//cache
 			_cacheManager.RemoveByPattern(PRODUCTTAG_PATTERN_KEY);
-
-            //event notification
-            _eventPublisher.EntityInserted(productTag);
         }
 
         /// <summary>
@@ -240,11 +233,7 @@ namespace SmartStore.Services.Catalog
 
             _productTagRepository.Update(productTag);
 
-			//cache
 			_cacheManager.RemoveByPattern(PRODUCTTAG_PATTERN_KEY);
-
-            //event notification
-            _eventPublisher.EntityUpdated(productTag);
         }
 
 		/// <summary>

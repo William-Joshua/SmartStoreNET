@@ -9,14 +9,20 @@ using SmartStore.Core.Logging;
 using SmartStore.Services.Security;
 using SmartStore.Services.Configuration;
 using SmartStore.Services.Stores;
-using Autofac;
 using SmartStore.Services.Helpers;
+using Autofac;
+using SmartStore.Services.Media;
 
 namespace SmartStore.Services
 {	
 	public interface ICommonServices
 	{
 		IComponentContext Container
+		{
+			get;
+		}
+
+		IApplicationEnvironment ApplicationEnvironment
 		{
 			get;
 		}
@@ -71,6 +77,11 @@ namespace SmartStore.Services
 			get;
 		}
 
+		IPictureService PictureService
+		{
+			get;
+		}
+
 		INotifier Notifier
 		{
 			get;
@@ -92,6 +103,11 @@ namespace SmartStore.Services
 		}
 
 		IDateTimeHelper DateTimeHelper
+		{
+			get;
+		}
+
+		IChronometer Chronometer
 		{
 			get;
 		}

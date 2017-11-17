@@ -10,7 +10,7 @@ namespace SmartStore.Core.Domain.Catalog
     /// </summary>
     [DataContract]
 	public partial class ProductVariantAttribute : BaseEntity, ILocalizedEntity
-    {
+	{
         private ICollection<ProductVariantAttributeValue> _productVariantAttributeValues;
 
         /// <summary>
@@ -42,6 +42,7 @@ namespace SmartStore.Core.Domain.Catalog
         /// Gets or sets the attribute control type identifier
         /// </summary>
 		[DataMember]
+		[Index]
 		public int AttributeControlTypeId { get; set; }
 
         /// <summary>
@@ -66,6 +67,20 @@ namespace SmartStore.Core.Domain.Catalog
                 this.AttributeControlTypeId = (int)value; 
             }
         }
+
+		public bool IsListTypeAttribute()
+		{
+			switch (AttributeControlType)
+			{
+				case AttributeControlType.Checkboxes:
+				case AttributeControlType.Boxes:
+				case AttributeControlType.DropdownList:
+				case AttributeControlType.RadioList:
+					return true;
+				default:
+					return false;
+			}
+		}
 
         /// <summary>
         /// Gets the product attribute

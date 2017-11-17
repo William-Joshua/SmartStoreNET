@@ -15,18 +15,14 @@ using SmartStore.Services.Directory;
 using SmartStore.Services.Localization;
 using SmartStore.Services.Stores;
 using SmartStore.Services.Tax;
-using SmartStore.Web.Framework.Localization;
 
 namespace SmartStore.Web.Framework
 {
-    /// <summary>
-	/// Work context for web application
-    /// </summary>
-    public partial class WebWorkContext : IWorkContext
+	public partial class WebWorkContext : IWorkContext
     {
-        private const string CustomerCookieName = "smartstore.customer";
+		private const string VisitorCookieName = "SMARTSTORE.VISITOR";
 
-        private readonly HttpContextBase _httpContext;
+		private readonly HttpContextBase _httpContext;
         private readonly ICustomerService _customerService;
 		private readonly IStoreContext _storeContext;
         private readonly IAuthenticationService _authenticationService;
@@ -40,7 +36,7 @@ namespace SmartStore.Web.Framework
 		private readonly Lazy<ITaxService> _taxService;
 		private readonly IUserAgent _userAgent;
 
-        private TaxDisplayType? _cachedTaxDisplayType;
+		private TaxDisplayType? _cachedTaxDisplayType;
         private Language _cachedLanguage;
         private Customer _cachedCustomer;
         private Currency _cachedCurrency;
@@ -62,58 +58,20 @@ namespace SmartStore.Web.Framework
             IStoreService storeService,
 			IUserAgent userAgent)
         {
-			this._cacheManager = cacheManager;
-            this._httpContext = httpContext;
-            this._customerService = customerService;
-			this._storeContext = storeContext;
-            this._authenticationService = authenticationService;
-            this._languageService = languageService;
-			this._attrService = attrService;
-            this._currencyService = currencyService;
-            this._taxSettings = taxSettings;
-			this._taxService = taxService;
-            this._localizationSettings = localizationSettings;
-            this._storeService = storeService;
-			this._userAgent = userAgent;
+			_cacheManager = cacheManager;
+            _httpContext = httpContext;
+            _customerService = customerService;
+			_storeContext = storeContext;
+            _authenticationService = authenticationService;
+            _languageService = languageService;
+			_attrService = attrService;
+            _currencyService = currencyService;
+            _taxSettings = taxSettings;
+			_taxService = taxService;
+            _localizationSettings = localizationSettings;
+            _storeService = storeService;
+			_userAgent = userAgent;
         }
-
-        protected HttpCookie GetCustomerCookie()
-        {
-            if (_httpContext == null || _httpContext.Request == null)
-                return null;
-
-            return _httpContext.Request.Cookies[CustomerCookieName];
-        }
-
-        protected void SetCustomerCookie(Guid customerGuid)
-        {
-            if (_httpContext != null && _httpContext.Response != null)
-            {
-                var cookie = new HttpCookie(CustomerCookieName);
-                cookie.HttpOnly = true;
-                cookie.Value = customerGuid.ToString();
-                if (customerGuid == Guid.Empty)
-                {
-                    cookie.Expires = DateTime.Now.AddMonths(-1);
-                }
-                else
-                {
-                    int cookieExpires = 24 * 365; //TODO make configurable
-                    cookie.Expires = DateTime.Now.AddHours(cookieExpires);
-                }
-
-				try
-				{
-					if (_httpContext.Response.Cookies[CustomerCookieName] != null)
-						_httpContext.Response.Cookies.Remove(CustomerCookieName);
-				}
-				catch (Exception) { }
-
-                _httpContext.Response.Cookies.Add(cookie);
-            }
-        }
-
-        //public Lazy<ITaxService> TaxService { get; set; }
 
         /// <summary>
         /// Gets or sets the current customer
@@ -127,38 +85,16 @@ namespace SmartStore.Web.Framework
 
                 Customer customer = null;
 
-				// check whether request is made by a background task
-				// in this case return built-in customer record for background task
-                if (_httpContext == null || _httpContext.IsFakeContext())
-                {
-                    customer = _customerService.GetCustomerBySystemName(SystemCustomerNames.BackgroundTask);
-                }
-
-                // check whether request is made by a search engine
-                // in this case return built-in customer record for search engines 
-                if (customer == null || customer.Deleted || !customer.Active)
-                {
-					if (_userAgent.IsBot)
-					{
-						customer = _customerService.GetCustomerBySystemName(SystemCustomerNames.SearchEngine);
-					}
-                }
-
-				// check whether request is made by the PDF converter
-				// in this case return built-in customer record for the converter
-				if (customer == null || customer.Deleted || !customer.Active)
+				// Is system account?
+				if (TryGetSystemAccount(out customer))
 				{
-					if (_userAgent.IsPdfConverter)
-					{
-						customer = _customerService.GetCustomerBySystemName(SystemCustomerNames.PdfConverter);
-					}
+					// Get out quickly. Bots tend to overstress the shop.
+					_cachedCustomer = customer;
+					return customer;
 				}
 
-                // registered user?
-                if (customer == null || customer.Deleted || !customer.Active)
-                {
-                    customer = _authenticationService.GetAuthenticatedCustomer();
-                }
+                // Registered user?
+                customer = _authenticationService.GetAuthenticatedCustomer();
 
                 // impersonate user if required (currently used for 'phone order' support)
                 if (customer != null && !customer.Deleted && customer.Active)
@@ -169,59 +105,124 @@ namespace SmartStore.Web.Framework
                         var impersonatedCustomer = _customerService.GetCustomerById(impersonatedCustomerId.Value);
                         if (impersonatedCustomer != null && !impersonatedCustomer.Deleted && impersonatedCustomer.Active)
                         {
-                            //set impersonated customer
+                            // set impersonated customer
                             _originalCustomerIfImpersonated = customer;
                             customer = impersonatedCustomer;
                         }
                     }
                 }
 
-                // load guest customer
-                if (customer == null || customer.Deleted || !customer.Active)
-                {
-                    var customerCookie = GetCustomerCookie();
-                    if (customerCookie != null && !String.IsNullOrEmpty(customerCookie.Value))
-                    {
-                        Guid customerGuid;
-                        if (Guid.TryParse(customerCookie.Value, out customerGuid))
-                        {
-                            var customerByCookie = _customerService.GetCustomerByGuid(customerGuid);
-                            if (customerByCookie != null && !customerByCookie.IsRegistered())
-                                customer = customerByCookie;
-                        }
-                    }
-                }
+				// Load guest customer
+				if (customer == null || customer.Deleted || !customer.Active)
+				{
+					customer = GetGuestCustomer();
+				}
+				
+				_cachedCustomer = customer;
 
-                // create guest if not exists
-                if (customer == null || customer.Deleted || !customer.Active)
-                {
-                    customer = _customerService.InsertGuestCustomer();
-                }
-
-
-                // validation
-                if (!customer.Deleted && customer.Active)
-                {
-                    SetCustomerCookie(customer.CustomerGuid);
-                    _cachedCustomer = customer;
-                }
-
-                return _cachedCustomer;
+				return _cachedCustomer;
             }
             set
             {
-				if (!value.IsSystemAccount)
-				{
-					SetCustomerCookie(value.CustomerGuid);
-				}
                 _cachedCustomer = value;
             }
         }
 
-        /// <summary>
-        /// Gets or sets the original customer (in case the current one is impersonated)
-        /// </summary>
-        public Customer OriginalCustomerIfImpersonated
+		protected bool TryGetSystemAccount(out Customer customer)
+		{
+			// Never check whether customer is deleted/inactive in this method.
+			// System accounts should neither be deletable nor activatable, they are mandatory.
+
+			customer = null;
+
+			// check whether request is made by a background task
+			// in this case return built-in customer record for background task
+			if (_httpContext == null || _httpContext.IsFakeContext())
+			{
+				customer = _customerService.GetCustomerBySystemName(SystemCustomerNames.BackgroundTask);
+			}
+
+			// check whether request is made by a search engine
+			// in this case return built-in customer record for search engines 
+			if (customer == null && _userAgent.IsBot)
+			{
+				customer = _customerService.GetCustomerBySystemName(SystemCustomerNames.SearchEngine);
+			}
+
+			// check whether request is made by the PDF converter
+			// in this case return built-in customer record for the converter
+			if (customer == null && _userAgent.IsPdfConverter)
+			{
+				customer = _customerService.GetCustomerBySystemName(SystemCustomerNames.PdfConverter);
+			}
+
+			return customer != null;
+		}
+
+		protected virtual Customer GetGuestCustomer()
+		{
+			Customer customer = null;
+			
+			var visitorCookie = _httpContext?.Request?.Cookies[VisitorCookieName];
+			if (visitorCookie == null)
+			{
+				// No anonymous visitor cookie yet. Try to identify anyway (by IP and UserAgent)
+				customer = _customerService.FindGuestCustomerByClientIdent(maxAgeSeconds: 180);
+			}
+			else
+			{
+				if (visitorCookie.Value.HasValue())
+				{
+					// Cookie present. Try to load guest customer by it's value.
+					Guid customerGuid;
+					if (Guid.TryParse(visitorCookie.Value, out customerGuid))
+					{
+						customer = _customerService.GetCustomerByGuid(customerGuid);
+					}
+				}
+			}
+
+			if (customer == null || customer.Deleted || !customer.Active || customer.IsRegistered())
+			{
+				// No record yet or account deleted/deactivated.
+				// Also dont' treat registered customers as guests.
+				// Create new record in these cases.
+				customer = _customerService.InsertGuestCustomer();
+			}
+
+			// Set visitor cookie
+			if ( _httpContext?.Response != null)
+			{
+				visitorCookie = new HttpCookie(VisitorCookieName);
+				visitorCookie.HttpOnly = true;
+				visitorCookie.Value = customer.CustomerGuid.ToString();
+				if (customer.CustomerGuid == Guid.Empty)
+				{
+					visitorCookie.Expires = DateTime.Now.AddMonths(-1);
+				}
+				else
+				{
+					int cookieExpires = 24 * 365; // TODO make configurable
+					visitorCookie.Expires = DateTime.Now.AddHours(cookieExpires);
+				}
+
+				try
+				{
+					_httpContext.Response.Cookies.Remove(VisitorCookieName);
+				}
+				finally
+				{
+					_httpContext.Response.Cookies.Add(visitorCookie);
+				}			
+			}
+
+			return customer;
+		}
+
+		/// <summary>
+		/// Gets or sets the original customer (in case the current one is impersonated)
+		/// </summary>
+		public Customer OriginalCustomerIfImpersonated
         {
             get
             {
@@ -238,63 +239,64 @@ namespace SmartStore.Web.Framework
             {
                 if (_cachedLanguage != null)
                     return _cachedLanguage;
-                
+
                 int storeId = _storeContext.CurrentStore.Id;
-                int customerLangId = 0;
+				var customer = this.CurrentCustomer;
+				int customerLangId = 0;
 
-                if (this.CurrentCustomer != null)
+                if (customer != null)
                 {
-                    customerLangId = this.CurrentCustomer.GetAttribute<int>(
-                        SystemCustomerAttributeNames.LanguageId, 
-                        _attrService, 
-                        _storeContext.CurrentStore.Id);
-                }
+					customerLangId = this.CurrentCustomer.GetAttribute<int>(
+						SystemCustomerAttributeNames.LanguageId,
+						_attrService,
+						_storeContext.CurrentStore.Id);
+				}
 
-                #region Get language from URL (if possible)
-
-				if (_localizationSettings.SeoFriendlyUrlsForLanguagesEnabled && _httpContext != null && _httpContext.Request != null)
+				if (_localizationSettings.SeoFriendlyUrlsForLanguagesEnabled && _httpContext.Request != null)
                 {
-                    var helper = new LocalizedUrlHelper(_httpContext.Request, true);
+					#region Get language from URL (if possible)
+
+					var helper = new LocalizedUrlHelper(_httpContext.Request, true);
                     string seoCode;
                     if (helper.IsLocalizedUrl(out seoCode))
                     {
                         if (_languageService.IsPublishedLanguage(seoCode, storeId))
                         {
-                            // the language is found. now we need to save it
+                            // The language is found. now we need to save it
                             var langBySeoCode = _languageService.GetLanguageBySeoCode(seoCode);
 							
-                            if (this.CurrentCustomer != null && customerLangId != langBySeoCode.Id)
+                            if (customer != null && customerLangId != langBySeoCode.Id)
                             {
                                 customerLangId = langBySeoCode.Id;
-                                this.SetCustomerLanguage(langBySeoCode.Id, storeId);
+                                SetCustomerLanguage(langBySeoCode.Id, storeId);
                             }
                             _cachedLanguage = langBySeoCode;
                             return langBySeoCode;
                         }
                     }
-                }
 
-                #endregion
+					#endregion
+				}
 
-				if (_localizationSettings.DetectBrowserUserLanguage && (customerLangId == 0 || !_languageService.IsPublishedLanguage(customerLangId, storeId)))
+				if (_localizationSettings.DetectBrowserUserLanguage && !customer.IsSystemAccount && (customerLangId == 0 || !_languageService.IsPublishedLanguage(customerLangId, storeId)))
                 {
                     #region Get Browser UserLanguage
 
                     // Fallback to browser detected language
                     Language browserLanguage = null;
 
-                    if (_httpContext != null && _httpContext.Request != null && _httpContext.Request.UserLanguages != null)
+                    if (_httpContext.Request?.UserLanguages != null)
                     {
                         var userLangs = _httpContext.Request.UserLanguages.Select(x => x.Split(new[] { ';' }, 2, StringSplitOptions.RemoveEmptyEntries)[0]);
                         if (userLangs.Any())
                         {
                             foreach (var culture in userLangs)
                             {
-                                browserLanguage = _languageService.GetLanguageByCulture(culture);
+                                browserLanguage = _languageService.GetLanguageByCulture(culture) ?? _languageService.GetLanguageBySeoCode(culture);
 								if (browserLanguage != null && _languageService.IsPublishedLanguage(browserLanguage.Id, storeId))
                                 {
-                                    // the language is found. now we need to save it
-                                    if (this.CurrentCustomer != null && customerLangId != browserLanguage.Id)
+                                    // The language is found. Now we need to save it
+                                    if (customer != null && customerLangId != browserLanguage.Id)
                                     {
                                         customerLangId = browserLanguage.Id;
                                         SetCustomerLanguage(customerLangId, storeId);
@@ -317,7 +319,11 @@ namespace SmartStore.Web.Framework
                 
                 // Fallback
 				customerLangId = _languageService.GetDefaultLanguageId(storeId);
-                SetCustomerLanguage(customerLangId, storeId);
+
+				if (customer != null)
+				{
+					SetCustomerLanguage(customerLangId, storeId);
+				}
 
                 _cachedLanguage = _languageService.GetLanguageById(customerLangId);
                 return _cachedLanguage;

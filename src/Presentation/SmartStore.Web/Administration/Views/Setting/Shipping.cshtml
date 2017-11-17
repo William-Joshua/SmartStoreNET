@@ -32,8 +32,10 @@
             <button type="submit" name="save" value="save" class="btn btn-primary"><i class="fa fa-check"></i>&nbsp;@T("Admin.Common.Save")</button>
         </div>
     </div>
-	@Html.Action("StoreScopeConfiguration", "Setting")
-	@Html.ValidationSummary(false)
+
+    Html.RenderAction("StoreScopeConfiguration", "Setting");
+
+    @Html.ValidationSummary(false)
 
     <table class="adminContent">
         <tr>
@@ -83,11 +85,20 @@
         </tr>
         <tr>
             <td class="adminTitle">
-                @Html.SmartLabelFor(model => model.SuppressShippingOptsCheckoutStepIfOnlyOneActiveOpt)
+                @Html.SmartLabelFor(model => model.SkipShippingIfSingleOption)
             </td>
             <td class="adminData">
-                @Html.SettingEditorFor(model => model.SuppressShippingOptsCheckoutStepIfOnlyOneActiveOpt)
-                @Html.ValidationMessageFor(model => model.SuppressShippingOptsCheckoutStepIfOnlyOneActiveOpt)
+                @Html.SettingEditorFor(model => model.SkipShippingIfSingleOption)
+                @Html.ValidationMessageFor(model => model.SkipShippingIfSingleOption)
+            </td>
+        </tr>
+        <tr>
+            <td class="adminTitle">
+                @Html.SmartLabelFor(model => model.ChargeOnlyHighestProductShippingSurcharge)
+            </td>
+            <td class="adminData">
+                @Html.SettingEditorFor(model => model.ChargeOnlyHighestProductShippingSurcharge)
+                @Html.ValidationMessageFor(model => model.ChargeOnlyHighestProductShippingSurcharge)
             </td>
         </tr>
 

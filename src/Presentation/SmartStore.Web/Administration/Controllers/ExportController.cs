@@ -144,28 +144,41 @@ namespace SmartStore.Admin.Controllers
 				RedirectToAction("Edit", new { id = profileId }));
 		}
 
-		private void AddFileInfo(List<ExportFileDetailsModel.FileInfo> list, string path, string publicFolderUrl = null, Store store = null)
+		private void AddFileInfo(
+			List<ExportFileDetailsModel.FileInfo> list,
+			string path,
+			DataExportResult.ExportFileInfo fileInfo = null,
+			string publicFolderUrl = null,
+			Store store = null)
 		{
 			if (System.IO.File.Exists(path) && !list.Any(x => x.FilePath == path))
 			{
-				var fileInfo = new ExportFileDetailsModel.FileInfo();
-				fileInfo.FilePath = path;
-				fileInfo.FileName = Path.GetFileName(path);
-				fileInfo.FileExtension = Path.GetExtension(path);
-				fileInfo.DisplayOrder = (fileInfo.FileExtension.IsCaseInsensitiveEqual(".zip") ? 0 : 1);
+				var fi = new ExportFileDetailsModel.FileInfo();
+				fi.FilePath = path;
+				fi.FileName = Path.GetFileName(path);
+				fi.FileExtension = Path.GetExtension(path);
+				fi.DisplayOrder = (fi.FileExtension.IsCaseInsensitiveEqual(".zip") ? 0 : 1);
+
+				if (fileInfo != null)
+				{
+					if (fileInfo.Label.HasValue())
+						fi.Label = fileInfo.Label;
+					else if (fileInfo.IsDataFile)
+						fi.Label = T("Admin.Common.Data");
+				}
 
 				if (store != null)
 				{
-					fileInfo.StoreId = store.Id;
-					fileInfo.StoreName = store.Name;
+					fi.StoreId = store.Id;
+					fi.StoreName = store.Name;
 				}
 
 				if (publicFolderUrl.HasValue())
 				{
-					fileInfo.FileUrl = publicFolderUrl + fileInfo.FileName;
+					fi.FileUrl = publicFolderUrl + fi.FileName;
 				}
 
-				list.Add(fileInfo);
+				list.Add(fi);
 			}
 		}
 
@@ -183,27 +196,26 @@ namespace SmartStore.Admin.Controllers
 			{
 				// add export files
 				var zipPath = profile.GetExportZipPath();
+				var resultInfo = XmlHelper.Deserialize<DataExportResult>(profile.ResultInfo);
 
 				if (deployment == null)
 				{
 					AddFileInfo(model.ExportFiles, zipPath);
 
-					foreach (var path in profile.GetExportFiles(provider))
+					if (resultInfo.Files != null)
 					{
-						AddFileInfo(model.ExportFiles, path);
+						var exportFolder = profile.GetExportFolder(true);
+
+						resultInfo.Files.Each(x => AddFileInfo(model.ExportFiles, Path.Combine(exportFolder, x.FileName), x));
 					}
 				}
 				else if (deployment.DeploymentType == ExportDeploymentType.FileSystem)
 				{
-					var deploymentFolder = deployment.GetDeploymentFolder();
-					var resultInfo = XmlHelper.Deserialize<DataExportResult>(profile.ResultInfo);
-
 					if (resultInfo.Files != null)
 					{
-						foreach (var file in resultInfo.Files)
-						{
-							AddFileInfo(model.ExportFiles, Path.Combine(deploymentFolder, file.FileName));
-						}
+						var deploymentFolder = deployment.GetDeploymentFolder();
+
+						resultInfo.Files.Each(x => AddFileInfo(model.ExportFiles, Path.Combine(deploymentFolder, x.FileName), x));
 					}
 				}
 
@@ -227,25 +239,23 @@ namespace SmartStore.Admin.Controllers
 						AddFileInfo(
 							model.PublicFiles,
 							Path.Combine(deploymentFolder, Path.GetFileName(zipPath)),
+							null,
 							publicDeployment.GetPublicFolderUrl(Services, currentStore));
 					}
-					else
+					else if (resultInfo.Files != null)
 					{
-						var resultInfo = XmlHelper.Deserialize<DataExportResult>(profile.ResultInfo);
-						if (resultInfo.Files != null)
+						var allStores = Services.StoreService.GetAllStores();
+
+						foreach (var file in resultInfo.Files)
 						{
-							var allStores = Services.StoreService.GetAllStores();
+							var store = (file.StoreId == 0 ? null : allStores.FirstOrDefault(x => x.Id == file.StoreId));
 
-							foreach (var file in resultInfo.Files)
-							{
-								var store = (file.StoreId == 0 ? null : allStores.FirstOrDefault(x => x.Id == file.StoreId));
-
-								AddFileInfo(
-									model.PublicFiles,
-									Path.Combine(deploymentFolder, file.FileName),
-									publicDeployment.GetPublicFolderUrl(Services, store ?? currentStore),
-									store);
-							}
+							AddFileInfo(
+								model.PublicFiles,
+								Path.Combine(deploymentFolder, file.FileName),
+								file,
+								publicDeployment.GetPublicFolderUrl(Services, store ?? currentStore),
+								store);
 						}
 					}
 				}
@@ -405,8 +415,14 @@ namespace SmartStore.Admin.Controllers
 				AttributeCombinationAsProduct = projection.AttributeCombinationAsProduct,
 				AttributeCombinationValueMergingId = projection.AttributeCombinationValueMergingId,
 				NoGroupedProducts = projection.NoGroupedProducts,
+				OnlyIndividuallyVisibleAssociated = projection.OnlyIndividuallyVisibleAssociated,
 				OrderStatusChangeId = projection.OrderStatusChangeId
 			};
+
+			if (profile.Projection.IsEmpty())
+			{
+				model.Projection.DescriptionMergingId = (int)ExportDescriptionMerging.Description;
+			}
 
 			model.Projection.AvailableStores = allStores
 				.Select(y => new SelectListItem { Text = y.Name, Value = y.Id.ToString() })
@@ -487,8 +503,6 @@ namespace SmartStore.Admin.Controllers
 
 				if (model.Provider.EntityType == ExportEntityType.Product)
 				{
-					var allCategories = _categoryService.GetAllCategories(showHidden: true);
-					var mappedCategories = allCategories.ToDictionary(x => x.Id);
 					var allManufacturers = _manufacturerService.GetAllManufacturers(true);
 					var allProductTags = _productTagService.GetAllProductTags();
 
@@ -506,8 +520,9 @@ namespace SmartStore.Admin.Controllers
 
 					model.Filter.AvailableProductTypes = ProductType.SimpleProduct.ToSelectList(false).ToList();
 
-					model.Filter.AvailableCategories = allCategories
-						.Select(x => new SelectListItem { Text = x.GetCategoryNameWithPrefix(_categoryService, mappedCategories), Value = x.Id.ToString() })
+					model.Filter.AvailableCategories = _categoryService.GetCategoryTree(includeHidden: true)
+						.FlattenNodes(false)
+						.Select(x => new SelectListItem { Text = x.GetCategoryNameIndented(), Value = x.Id.ToString() })
 						.ToList();
 
 					model.Filter.AvailableManufacturers = allManufacturers
@@ -618,7 +633,7 @@ namespace SmartStore.Admin.Controllers
 					if (provider != null && !provider.Metadata.IsHidden)
 					{
 						var model = CreateFileDetailsModel(profile, provider, null);
-						return Json(this.RenderPartialViewToString("ProfileFileCount", model.FileCount), JsonRequestBehavior.AllowGet);
+						return Json(this.RenderPartialViewToString("~/Administration/Views/Export/ProfileFileCount.cshtml", model.FileCount), JsonRequestBehavior.AllowGet);
 					}
 				}
 			}
@@ -812,10 +827,11 @@ namespace SmartStore.Admin.Controllers
 					AttributeCombinationAsProduct = model.Projection.AttributeCombinationAsProduct,
 					AttributeCombinationValueMergingId = model.Projection.AttributeCombinationValueMergingId,
 					NoGroupedProducts = model.Projection.NoGroupedProducts,
+					OnlyIndividuallyVisibleAssociated = model.Projection.OnlyIndividuallyVisibleAssociated,
 					OrderStatusChangeId = model.Projection.OrderStatusChangeId
 				};
 
-				profile.Projection = XmlHelper.Serialize<ExportProjection>(projection);
+				profile.Projection = XmlHelper.Serialize(projection);
 			}
 
 			// filtering
@@ -855,7 +871,7 @@ namespace SmartStore.Admin.Controllers
 					IsActiveSubscriber = model.Filter.IsActiveSubscriber
 				};
 
-				profile.Filtering = XmlHelper.Serialize<ExportFilter>(filter);
+				profile.Filtering = XmlHelper.Serialize(filter);
 			}
 
 			// provider configuration
@@ -973,7 +989,6 @@ namespace SmartStore.Admin.Controllers
 				var subscriberModel = new List<ExportPreviewNewsLetterSubscriptionModel>();
 
 				object gridData = null;
-				Dictionary<int, Category> allCategories = null;
 				IList<Store> allStores = null;
 
 				var request = new DataExportRequest(profile, provider);
@@ -1024,16 +1039,10 @@ namespace SmartStore.Admin.Controllers
 					{
 						var category = item.Entity as Category;
 
-						if (allCategories == null)
-						{
-							allCategories = _categoryService.GetAllCategories(showHidden: true, applyNavigationFilters: false)
-								.ToDictionary(x => x.Id);
-						}
-
 						categoryModel.Add(new ExportPreviewCategoryModel
 						{
 							Id = category.Id,
-							Breadcrumb = category.GetCategoryBreadCrumb(_categoryService, allCategories),
+							Breadcrumb = ((ICategoryNode)category).GetCategoryPath(_categoryService, withAlias: true),
 							FullName = item.FullName,
 							Alias = item.Alias,
 							Published = category.Published,
@@ -1134,8 +1143,11 @@ namespace SmartStore.Admin.Controllers
 			if (provider == null || provider.Metadata.IsHidden)
 				return RedirectToAction("List");
 
-			var taskParams = new Dictionary<string, string>();
-			taskParams.Add(TaskExecutor.CurrentCustomerIdParamName, Services.WorkContext.CurrentCustomer.Id.ToString());
+			var taskParams = new Dictionary<string, string>
+			{
+				{ TaskExecutor.CurrentCustomerIdParamName, Services.WorkContext.CurrentCustomer.Id.ToString() },
+				{ TaskExecutor.CurrentStoreIdParamName, Services.StoreContext.CurrentStore.Id.ToString() }
+			};
 
 			if (selectedIds.HasValue())
 				taskParams.Add("SelectedIds", selectedIds);
@@ -1250,7 +1262,7 @@ namespace SmartStore.Admin.Controllers
 					}
 					catch (IOException)
 					{
-						NotifyWarning(T("Admin.Common.FileInUse"));
+						message = T("Admin.Common.FileInUse");
 					}
 				}
 			}

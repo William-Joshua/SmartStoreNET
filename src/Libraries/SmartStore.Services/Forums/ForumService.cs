@@ -2,34 +2,20 @@
 using System.Collections.Generic;
 using System.Linq;
 using SmartStore.Core;
-using SmartStore.Core.Caching;
 using SmartStore.Core.Data;
 using SmartStore.Core.Domain.Customers;
 using SmartStore.Core.Domain.Forums;
 using SmartStore.Core.Domain.Stores;
 using SmartStore.Core.Events;
+using SmartStore.Data.Caching;
 using SmartStore.Services.Common;
 using SmartStore.Services.Customers;
 using SmartStore.Services.Messages;
 
 namespace SmartStore.Services.Forums
 {
-    /// <summary>
-    /// Forum service
-    /// </summary>
     public partial class ForumService : IForumService
     {
-        #region Constants
-		
-		private const string FORUMGROUP_ALL_KEY = "SmartStore.forumgroup.all-{0}";
-        private const string FORUM_ALLBYFORUMGROUPID_KEY = "SmartStore.forum.allbyforumgroupid-{0}";
-        private const string FORUMGROUP_PATTERN_KEY = "SmartStore.forumgroup.";
-        private const string FORUM_PATTERN_KEY = "SmartStore.forum.";
-        
-		#endregion
-
-        #region Fields
-
         private readonly IRepository<ForumGroup> _forumGroupRepository;
         private readonly IRepository<Forum> _forumRepository;
         private readonly IRepository<ForumTopic> _forumTopicRepository;
@@ -38,18 +24,13 @@ namespace SmartStore.Services.Forums
         private readonly IRepository<ForumSubscription> _forumSubscriptionRepository;
         private readonly ForumSettings _forumSettings;
         private readonly IRepository<Customer> _customerRepository;
-        private readonly IRequestCache _requestCache;
         private readonly IGenericAttributeService _genericAttributeService;
         private readonly ICustomerService _customerService;
         private readonly IWorkflowMessageService _workflowMessageService;
 		private readonly IRepository<StoreMapping> _storeMappingRepository;
 		private readonly ICommonServices _services;
 
-        #endregion
-
-        #region Ctor
-
-        public ForumService(IRequestCache requestCache,
+        public ForumService(
             IRepository<ForumGroup> forumGroupRepository,
             IRepository<Forum> forumRepository,
             IRepository<ForumTopic> forumTopicRepository,
@@ -64,7 +45,6 @@ namespace SmartStore.Services.Forums
 			IRepository<StoreMapping> storeMappingRepository,
 			ICommonServices services)
         {
-            _requestCache = requestCache;
             _forumGroupRepository = forumGroupRepository;
             _forumRepository = forumRepository;
             _forumTopicRepository = forumTopicRepository;
@@ -82,14 +62,6 @@ namespace SmartStore.Services.Forums
 
 		public DbQuerySettings QuerySettings { get; set; }
 
-		#endregion
-
-        #region Utilities
-
-        /// <summary>
-        /// Update forum stats
-        /// </summary>
-        /// <param name="forumId">The forum identifier</param>
         private void UpdateForumStats(int forumId)
         {
             if (forumId == 0)
@@ -150,10 +122,6 @@ namespace SmartStore.Services.Forums
             UpdateForum(forum);
         }
 
-        /// <summary>
-        /// Update forum topic stats
-        /// </summary>
-        /// <param name="forumTopicId">The forum topic identifier</param>
         private void UpdateForumTopicStats(int forumTopicId)
         {
             if (forumTopicId == 0)
@@ -201,10 +169,6 @@ namespace SmartStore.Services.Forums
             UpdateTopic(forumTopic);
         }
 
-        /// <summary>
-        /// Update customer stats
-        /// </summary>
-        /// <param name="customerId">The customer identifier</param>
         private void UpdateCustomerStats(int customerId)
         {
             if (customerId == 0)
@@ -236,14 +200,6 @@ namespace SmartStore.Services.Forums
             return false;
         }
 
-        #endregion
-
-        #region Methods
-
-        /// <summary>
-        /// Deletes a forum group
-        /// </summary>
-        /// <param name="forumGroup">Forum group</param>
         public virtual void DeleteForumGroup(ForumGroup forumGroup)
         {
             if (forumGroup == null)
@@ -252,19 +208,8 @@ namespace SmartStore.Services.Forums
             }
 
             _forumGroupRepository.Delete(forumGroup);
-
-            _requestCache.RemoveByPattern(FORUMGROUP_PATTERN_KEY);
-            _requestCache.RemoveByPattern(FORUM_PATTERN_KEY);
-
-            //event notification
-            _services.EventPublisher.EntityDeleted(forumGroup);
         }
 
-        /// <summary>
-        /// Gets a forum group
-        /// </summary>
-        /// <param name="forumGroupId">The forum group identifier</param>
-        /// <returns>Forum group</returns>
         public virtual ForumGroup GetForumGroupById(int forumGroupId)
         {
             if (forumGroupId == 0)
@@ -273,45 +218,33 @@ namespace SmartStore.Services.Forums
             return _forumGroupRepository.GetById(forumGroupId);
         }
 
-        /// <summary>
-        /// Gets all forum groups
-        /// </summary>
-        /// <returns>Forum groups</returns>
 		public virtual IList<ForumGroup> GetAllForumGroups(bool showHidden = false)
         {
-			string key = string.Format(FORUMGROUP_ALL_KEY, showHidden);
-            return _requestCache.Get(key, () =>
-            {
-				var query = _forumGroupRepository.Table;
+			var query = _forumGroupRepository.Table;
 
-				if (!showHidden && !QuerySettings.IgnoreMultiStore)
-				{
-					var currentStoreId = _services.StoreContext.CurrentStore.Id;
+			if (!showHidden && !QuerySettings.IgnoreMultiStore)
+			{
+				var currentStoreId = _services.StoreContext.CurrentStore.Id;
 
-					query = 
-						from fg in query
-						join sm in _storeMappingRepository.Table on new { c1 = fg.Id, c2 = "ForumGroup" } equals new { c1 = sm.EntityId, c2 = sm.EntityName } into fg_sm
-						from sm in fg_sm.DefaultIfEmpty()
-						where !fg.LimitedToStores || currentStoreId == sm.StoreId
-						select fg;
+				query =
+					from fg in query
+					join sm in _storeMappingRepository.Table on new { c1 = fg.Id, c2 = "ForumGroup" } equals new { c1 = sm.EntityId, c2 = sm.EntityName } into fg_sm
+					from sm in fg_sm.DefaultIfEmpty()
+					where !fg.LimitedToStores || currentStoreId == sm.StoreId
+					select fg;
 
-					query =
-						from fg in query
-						group fg by fg.Id into fgGroup
-						orderby fgGroup.Key
-						select fgGroup.FirstOrDefault();
-				}
+				query =
+					from fg in query
+					group fg by fg.Id into fgGroup
+					orderby fgGroup.Key
+					select fgGroup.FirstOrDefault();
+			}
 
-				query = query.OrderBy(m => m.DisplayOrder);
+			query = query.OrderBy(m => m.DisplayOrder);
 
-                return query.ToList();
-            });
-        }
+			return query.ToListCached();
+		}
 
-        /// <summary>
-        /// Inserts a forum group
-        /// </summary>
-        /// <param name="forumGroup">Forum group</param>
         public virtual void InsertForumGroup(ForumGroup forumGroup)
         {
             if (forumGroup == null)
@@ -320,19 +253,8 @@ namespace SmartStore.Services.Forums
             }
 
             _forumGroupRepository.Insert(forumGroup);
-
-            //cache
-            _requestCache.RemoveByPattern(FORUMGROUP_PATTERN_KEY);
-            _requestCache.RemoveByPattern(FORUM_PATTERN_KEY);
-
-            //event notification
-            _services.EventPublisher.EntityInserted(forumGroup);
         }
 
-        /// <summary>
-        /// Updates the forum group
-        /// </summary>
-        /// <param name="forumGroup">Forum group</param>
         public virtual void UpdateForumGroup(ForumGroup forumGroup)
         {
             if (forumGroup == null)
@@ -341,19 +263,8 @@ namespace SmartStore.Services.Forums
             }
 
             _forumGroupRepository.Update(forumGroup);
-
-            //cache
-            _requestCache.RemoveByPattern(FORUMGROUP_PATTERN_KEY);
-            _requestCache.RemoveByPattern(FORUM_PATTERN_KEY);
-
-            //event notification
-            _services.EventPublisher.EntityUpdated(forumGroup);
         }
 
-        /// <summary>
-        /// Deletes a forum
-        /// </summary>
-        /// <param name="forum">Forum</param>
         public virtual void DeleteForum(Forum forum)
         {            
             if (forum == null)
@@ -371,8 +282,6 @@ namespace SmartStore.Services.Forums
             foreach (var fs in queryFs1.ToList())
             {
                 _forumSubscriptionRepository.Delete(fs);
-                //event notification
-                _services.EventPublisher.EntityDeleted(fs);
             }
 
             //delete forum subscriptions (forum)
@@ -382,25 +291,12 @@ namespace SmartStore.Services.Forums
             foreach (var fs2 in queryFs2.ToList())
             {
                 _forumSubscriptionRepository.Delete(fs2);
-                //event notification
-                _services.EventPublisher.EntityDeleted(fs2);
             }
 
             //delete forum
             _forumRepository.Delete(forum);
-
-            _requestCache.RemoveByPattern(FORUMGROUP_PATTERN_KEY);
-            _requestCache.RemoveByPattern(FORUM_PATTERN_KEY);
-
-            //event notification
-            _services.EventPublisher.EntityDeleted(forum);
         }
 
-        /// <summary>
-        /// Gets a forum
-        /// </summary>
-        /// <param name="forumId">The forum identifier</param>
-        /// <returns>Forum</returns>
         public virtual Forum GetForumById(int forumId)
         {
             if (forumId == 0)
@@ -409,29 +305,17 @@ namespace SmartStore.Services.Forums
             return _forumRepository.GetById(forumId);
         }
 
-        /// <summary>
-        /// Gets forums by forum group identifier
-        /// </summary>
-        /// <param name="forumGroupId">The forum group identifier</param>
-        /// <returns>Forums</returns>
         public virtual IList<Forum> GetAllForumsByGroupId(int forumGroupId)
         {
-            string key = string.Format(FORUM_ALLBYFORUMGROUPID_KEY, forumGroupId);
-            return _requestCache.Get(key, () =>
-            {
-                var query = from f in _forumRepository.Table
-                            orderby f.DisplayOrder
-                            where f.ForumGroupId == forumGroupId
-                            select f;
-                var forums = query.ToList();
-                return forums;
-            });
-        }
+			var query = from f in _forumRepository.Table
+						orderby f.DisplayOrder
+						where f.ForumGroupId == forumGroupId
+						select f;
 
-        /// <summary>
-        /// Inserts a forum
-        /// </summary>
-        /// <param name="forum">Forum</param>
+			var forums = query.ToListCached();
+			return forums;
+		}
+
         public virtual void InsertForum(Forum forum)
         {
             if (forum == null)
@@ -440,18 +324,8 @@ namespace SmartStore.Services.Forums
             }
 
             _forumRepository.Insert(forum);
-
-            _requestCache.RemoveByPattern(FORUMGROUP_PATTERN_KEY);
-            _requestCache.RemoveByPattern(FORUM_PATTERN_KEY);
-
-            //event notification
-            _services.EventPublisher.EntityInserted(forum);
         }
 
-        /// <summary>
-        /// Updates the forum
-        /// </summary>
-        /// <param name="forum">Forum</param>
         public virtual void UpdateForum(Forum forum)
         {
             if (forum == null)
@@ -459,19 +333,9 @@ namespace SmartStore.Services.Forums
                 throw new ArgumentNullException("forum");
             }
 
-            _forumRepository.Update(forum);
-            
-            _requestCache.RemoveByPattern(FORUMGROUP_PATTERN_KEY);
-            _requestCache.RemoveByPattern(FORUM_PATTERN_KEY);
-
-            //event notification
-            _services.EventPublisher.EntityUpdated(forum);
+			_forumRepository.Update(forum);
         }
 
-        /// <summary>
-        /// Deletes a forum topic
-        /// </summary>
-        /// <param name="forumTopic">Forum topic</param>
         public virtual void DeleteTopic(ForumTopic forumTopic)
         {            
             if (forumTopic == null)
@@ -493,37 +357,18 @@ namespace SmartStore.Services.Forums
             foreach (var fs in forumSubscriptions)
             {
                 _forumSubscriptionRepository.Delete(fs);
-                //event notification
-                _services.EventPublisher.EntityDeleted(fs);
             }
 
             //update stats
             UpdateForumStats(forumId);
             UpdateCustomerStats(customerId);
-
-            _requestCache.RemoveByPattern(FORUMGROUP_PATTERN_KEY);
-            _requestCache.RemoveByPattern(FORUM_PATTERN_KEY);
-
-            //event notification
-            _services.EventPublisher.EntityDeleted(forumTopic);
         }
 
-        /// <summary>
-        /// Gets a forum topic
-        /// </summary>
-        /// <param name="forumTopicId">The forum topic identifier</param>
-        /// <returns>Forum Topic</returns>
         public virtual ForumTopic GetTopicById(int forumTopicId)
         {
             return GetTopicById(forumTopicId, false);
         }
 
-        /// <summary>
-        /// Gets a forum topic
-        /// </summary>
-        /// <param name="forumTopicId">The forum topic identifier</param>
-        /// <param name="increaseViews">The value indicating whether to increase forum topic views</param>
-        /// <returns>Forum Topic</returns>
         public virtual ForumTopic GetTopicById(int forumTopicId, bool increaseViews)
         {
             if (forumTopicId == 0)
@@ -549,17 +394,6 @@ namespace SmartStore.Services.Forums
             return forumTopic;
         }
 
-        /// <summary>
-        /// Gets all forum topics
-        /// </summary>
-        /// <param name="forumId">The forum identifier</param>
-        /// <param name="customerId">The customer identifier</param>
-        /// <param name="keywords">Keywords</param>
-        /// <param name="searchType">Search type</param>
-        /// <param name="limitDays">Limit by the last number days; 0 to load all topics</param>
-        /// <param name="pageIndex">Page index</param>
-        /// <param name="pageSize">Page size</param>
-        /// <returns>Forum Topics</returns>
         public virtual IPagedList<ForumTopic> GetAllTopics(int forumId, int customerId, string keywords, ForumSearchType searchType, int limitDays, int pageIndex, int pageSize)
         {
             DateTime? limitDate = null;
@@ -592,12 +426,6 @@ namespace SmartStore.Services.Forums
             return topics;
         }
 
-        /// <summary>
-        /// Gets active forum topics
-        /// </summary>
-        /// <param name="forumId">The forum identifier</param>
-        /// <param name="count">Count of forum topics to return</param>
-        /// <returns>Forum Topics</returns>
         public virtual IList<ForumTopic> GetActiveTopics(int forumId, int count)
         {
             var query =
@@ -631,11 +459,6 @@ namespace SmartStore.Services.Forums
             return forumTopics;
         }
 
-        /// <summary>
-        /// Inserts a forum topic
-        /// </summary>
-        /// <param name="forumTopic">Forum topic</param>
-        /// <param name="sendNotifications">A value indicating whether to send notifications to subscribed customers</param>
         public virtual void InsertTopic(ForumTopic forumTopic, bool sendNotifications)
         {
             if (forumTopic == null)
@@ -647,13 +470,6 @@ namespace SmartStore.Services.Forums
 
             //update stats
             UpdateForumStats(forumTopic.ForumId);
-
-            //cache            
-            _requestCache.RemoveByPattern(FORUMGROUP_PATTERN_KEY);
-            _requestCache.RemoveByPattern(FORUM_PATTERN_KEY);
-
-            //event notification
-            _services.EventPublisher.EntityInserted(forumTopic);
 
             //send notifications
             if (sendNotifications)
@@ -677,10 +493,6 @@ namespace SmartStore.Services.Forums
             }
         }
 
-        /// <summary>
-        /// Updates the forum topic
-        /// </summary>
-        /// <param name="forumTopic">Forum topic</param>
         public virtual void UpdateTopic(ForumTopic forumTopic)
         {
             if (forumTopic == null)
@@ -689,20 +501,8 @@ namespace SmartStore.Services.Forums
             }
 
             _forumTopicRepository.Update(forumTopic);
-
-            _requestCache.RemoveByPattern(FORUMGROUP_PATTERN_KEY);
-            _requestCache.RemoveByPattern(FORUM_PATTERN_KEY);
-
-            //event notification
-            _services.EventPublisher.EntityUpdated(forumTopic);
         }
 
-        /// <summary>
-        /// Moves the forum topic
-        /// </summary>
-        /// <param name="forumTopicId">The forum topic identifier</param>
-        /// <param name="newForumId">New forum identifier</param>
-        /// <returns>Moved forum topic</returns>
         public virtual ForumTopic MoveTopic(int forumTopicId, int newForumId)
         {
             var forumTopic = GetTopicById(forumTopicId);
@@ -719,7 +519,6 @@ namespace SmartStore.Services.Forums
                     if (previousForumId != newForumId)
                     {
                         forumTopic.ForumId = newForum.Id;
-                        forumTopic.UpdatedOnUtc = DateTime.UtcNow;
                         UpdateTopic(forumTopic);
 
                         //update forum stats
@@ -731,10 +530,6 @@ namespace SmartStore.Services.Forums
             return forumTopic;
         }
 
-        /// <summary>
-        /// Deletes a forum post
-        /// </summary>
-        /// <param name="forumPost">Forum post</param>
         public virtual void DeletePost(ForumPost forumPost)
         {            
             if (forumPost == null)
@@ -772,20 +567,8 @@ namespace SmartStore.Services.Forums
             UpdateForumStats(forumId);
             UpdateCustomerStats(customerId);
 
-            //clear cache            
-            _requestCache.RemoveByPattern(FORUMGROUP_PATTERN_KEY);
-            _requestCache.RemoveByPattern(FORUM_PATTERN_KEY);
-
-            //event notification
-            _services.EventPublisher.EntityDeleted(forumPost);
-
         }
 
-        /// <summary>
-        /// Gets a forum post
-        /// </summary>
-        /// <param name="forumPostId">The forum post identifier</param>
-        /// <returns>Forum Post</returns>
         public virtual ForumPost GetPostById(int forumPostId)
         {
             if (forumPostId == 0)
@@ -801,30 +584,11 @@ namespace SmartStore.Services.Forums
             return forumPost;
         }
 
-        /// <summary>
-        /// Gets all forum posts
-        /// </summary>
-        /// <param name="forumTopicId">The forum topic identifier</param>
-        /// <param name="customerId">The customer identifier</param>
-        /// <param name="keywords">Keywords</param>
-        /// <param name="pageIndex">Page index</param>
-        /// <param name="pageSize">Page size</param>
-        /// <returns>Posts</returns>
         public virtual IPagedList<ForumPost> GetAllPosts(int forumTopicId, int customerId, string keywords, int pageIndex, int pageSize)
         {
             return GetAllPosts(forumTopicId, customerId, keywords, true, pageIndex, pageSize);
         }
 
-        /// <summary>
-        /// Gets all forum posts
-        /// </summary>
-        /// <param name="forumTopicId">The forum topic identifier</param>
-        /// <param name="customerId">The customer identifier</param>
-        /// <param name="keywords">Keywords</param>
-        /// <param name="ascSort">Sort order</param>
-        /// <param name="pageIndex">Page index</param>
-        /// <param name="pageSize">Page size</param>
-        /// <returns>Forum Posts</returns>
         public virtual IPagedList<ForumPost> GetAllPosts(int forumTopicId, int customerId, string keywords, bool ascSort, int pageIndex, int pageSize)
         {
             var query = _forumPostRepository.Table;
@@ -854,11 +618,6 @@ namespace SmartStore.Services.Forums
             return forumPosts;
         }
 
-        /// <summary>
-        /// Inserts a forum post
-        /// </summary>
-        /// <param name="forumPost">The forum post</param>
-        /// <param name="sendNotifications">A value indicating whether to send notifications to subscribed customers</param>
         public virtual void InsertPost(ForumPost forumPost, bool sendNotifications)
         {
             if (forumPost == null)
@@ -875,13 +634,6 @@ namespace SmartStore.Services.Forums
             UpdateForumTopicStats(forumPost.TopicId);
             UpdateForumStats(forumId);
             UpdateCustomerStats(customerId);
-
-            //clear cache            
-            _requestCache.RemoveByPattern(FORUMGROUP_PATTERN_KEY);
-            _requestCache.RemoveByPattern(FORUM_PATTERN_KEY);
-
-            //event notification
-            _services.EventPublisher.EntityInserted(forumPost);
 
             //notifications
             if (sendNotifications)
@@ -908,10 +660,6 @@ namespace SmartStore.Services.Forums
             }
         }
 
-        /// <summary>
-        /// Updates the forum post
-        /// </summary>
-        /// <param name="forumPost">Forum post</param>
         public virtual void UpdatePost(ForumPost forumPost)
         {
             //validation
@@ -921,18 +669,8 @@ namespace SmartStore.Services.Forums
             }
 
             _forumPostRepository.Update(forumPost);
-
-            _requestCache.RemoveByPattern(FORUMGROUP_PATTERN_KEY);
-            _requestCache.RemoveByPattern(FORUM_PATTERN_KEY);
-
-            //event notification
-            _services.EventPublisher.EntityUpdated(forumPost);
         }
 
-        /// <summary>
-        /// Deletes a private message
-        /// </summary>
-        /// <param name="privateMessage">Private message</param>
         public virtual void DeletePrivateMessage(PrivateMessage privateMessage)
         {
             if (privateMessage == null)
@@ -941,16 +679,8 @@ namespace SmartStore.Services.Forums
             }
 
             _forumPrivateMessageRepository.Delete(privateMessage);
-
-            //event notification
-            _services.EventPublisher.EntityDeleted(privateMessage);
         }
 
-        /// <summary>
-        /// Gets a private message
-        /// </summary>
-        /// <param name="privateMessageId">The private message identifier</param>
-        /// <returns>Private message</returns>
         public virtual PrivateMessage GetPrivateMessageById(int privateMessageId)
         {
             if (privateMessageId == 0)
@@ -966,52 +696,45 @@ namespace SmartStore.Services.Forums
             return privateMessage;
         }
 
-        /// <summary>
-        /// Gets private messages
-        /// </summary>
-		/// <param name="storeId">The store identifier; pass 0 to load all messages</param>
-        /// <param name="fromCustomerId">The customer identifier who sent the message</param>
-        /// <param name="toCustomerId">The customer identifier who should receive the message</param>
-        /// <param name="isRead">A value indicating whether loaded messages are read. false - to load not read messages only, 1 to load read messages only, null to load all messages</param>
-        /// <param name="isDeletedByAuthor">A value indicating whether loaded messages are deleted by author. false - messages are not deleted by author, null to load all messages</param>
-        /// <param name="isDeletedByRecipient">A value indicating whether loaded messages are deleted by recipient. false - messages are not deleted by recipient, null to load all messages</param>
-        /// <param name="keywords">Keywords</param>
-        /// <param name="pageIndex">Page index</param>
-        /// <param name="pageSize">Page size</param>
-        /// <returns>Private messages</returns>
-		public virtual IPagedList<PrivateMessage> GetAllPrivateMessages(int storeId, int fromCustomerId,
-            int toCustomerId, bool? isRead, bool? isDeletedByAuthor, bool? isDeletedByRecipient,
-            string keywords, int pageIndex, int pageSize)
+		public virtual IPagedList<PrivateMessage> GetAllPrivateMessages(
+			int storeId, 
+			int fromCustomerId,
+            int toCustomerId, 
+			bool? isRead, 
+			bool? isDeletedByAuthor, 
+			bool? isDeletedByRecipient,
+            string keywords, 
+			int pageIndex, 
+			int pageSize)
         {
 			var query = _forumPrivateMessageRepository.Table;
+
 			if (storeId > 0)
 				query = query.Where(pm => storeId == pm.StoreId);
-            if (fromCustomerId > 0)
-                query = query.Where(pm => fromCustomerId == pm.FromCustomerId);
-            if (toCustomerId > 0)
-                query = query.Where(pm => toCustomerId == pm.ToCustomerId);
-            if (isRead.HasValue)
-                query = query.Where(pm => isRead.Value == pm.IsRead);
-            if (isDeletedByAuthor.HasValue)
-                query = query.Where(pm => isDeletedByAuthor.Value == pm.IsDeletedByAuthor);
-            if (isDeletedByRecipient.HasValue)
-                query = query.Where(pm => isDeletedByRecipient.Value == pm.IsDeletedByRecipient);
-            if (!String.IsNullOrEmpty(keywords))
-            {
-                query = query.Where(pm => pm.Subject.Contains(keywords));
-                query = query.Where(pm => pm.Text.Contains(keywords));
-            }
-            query = query.OrderByDescending(pm => pm.CreatedOnUtc);
+			if (fromCustomerId > 0)
+				query = query.Where(pm => fromCustomerId == pm.FromCustomerId);
+			if (toCustomerId > 0)
+				query = query.Where(pm => toCustomerId == pm.ToCustomerId);
+			if (isRead.HasValue)
+				query = query.Where(pm => isRead.Value == pm.IsRead);
+			if (isDeletedByAuthor.HasValue)
+				query = query.Where(pm => isDeletedByAuthor.Value == pm.IsDeletedByAuthor);
+			if (isDeletedByRecipient.HasValue)
+				query = query.Where(pm => isDeletedByRecipient.Value == pm.IsDeletedByRecipient);
 
-            var privateMessages = new PagedList<PrivateMessage>(query, pageIndex, pageSize);
+			if (!String.IsNullOrEmpty(keywords))
+			{
+				query = query.Where(pm => pm.Subject.Contains(keywords));
+				query = query.Where(pm => pm.Text.Contains(keywords));
+			}
+
+			query = query.OrderByDescending(pm => pm.CreatedOnUtc);
+
+			var privateMessages = new PagedList<PrivateMessage>(query, pageIndex, pageSize);
 
             return privateMessages;
         }
 
-        /// <summary>
-        /// Inserts a private message
-        /// </summary>
-        /// <param name="privateMessage">Private message</param>
         public virtual void InsertPrivateMessage(PrivateMessage privateMessage)
         {
             if (privateMessage == null)
@@ -1020,9 +743,6 @@ namespace SmartStore.Services.Forums
             }
 
             _forumPrivateMessageRepository.Insert(privateMessage);
-
-            //event notification
-            _services.EventPublisher.EntityInserted(privateMessage);
 
             var customerTo = _customerService.GetCustomerById(privateMessage.ToCustomerId);
             if (customerTo == null)
@@ -1040,10 +760,6 @@ namespace SmartStore.Services.Forums
             }
         }
 
-        /// <summary>
-        /// Updates the private message
-        /// </summary>
-        /// <param name="privateMessage">Private message</param>
         public virtual void UpdatePrivateMessage(PrivateMessage privateMessage)
         {
             if (privateMessage == null)
@@ -1052,21 +768,13 @@ namespace SmartStore.Services.Forums
             if (privateMessage.IsDeletedByAuthor && privateMessage.IsDeletedByRecipient)
             {
                 _forumPrivateMessageRepository.Delete(privateMessage);
-                //event notification
-                _services.EventPublisher.EntityDeleted(privateMessage);
             }
             else
             {
                 _forumPrivateMessageRepository.Update(privateMessage);
-                //event notification
-                _services.EventPublisher.EntityUpdated(privateMessage);
             }
         }
 
-        /// <summary>
-        /// Deletes a forum subscription
-        /// </summary>
-        /// <param name="forumSubscription">Forum subscription</param>
         public virtual void DeleteSubscription(ForumSubscription forumSubscription)
         {
             if (forumSubscription == null)
@@ -1075,16 +783,8 @@ namespace SmartStore.Services.Forums
             }
 
             _forumSubscriptionRepository.Delete(forumSubscription);
-
-            //event notification
-            _services.EventPublisher.EntityDeleted(forumSubscription);
         }
 
-        /// <summary>
-        /// Gets a forum subscription
-        /// </summary>
-        /// <param name="forumSubscriptionId">The forum subscription identifier</param>
-        /// <returns>Forum subscription</returns>
         public virtual ForumSubscription GetSubscriptionById(int forumSubscriptionId)
         {
             if (forumSubscriptionId == 0)
@@ -1100,15 +800,6 @@ namespace SmartStore.Services.Forums
             return forumSubscription;
         }
 
-        /// <summary>
-        /// Gets forum subscriptions
-        /// </summary>
-        /// <param name="customerId">The customer identifier</param>
-        /// <param name="forumId">The forum identifier</param>
-        /// <param name="topicId">The topic identifier</param>
-        /// <param name="pageIndex">Page index</param>
-        /// <param name="pageSize">Page size</param>
-        /// <returns>Forum subscriptions</returns>
         public virtual IPagedList<ForumSubscription> GetAllSubscriptions(int customerId, int forumId, int topicId, int pageIndex, int pageSize)
         {
             var fsQuery = 
@@ -1131,10 +822,6 @@ namespace SmartStore.Services.Forums
             return forumSubscriptions;
         }
 
-        /// <summary>
-        /// Inserts a forum subscription
-        /// </summary>
-        /// <param name="forumSubscription">Forum subscription</param>
         public virtual void InsertSubscription(ForumSubscription forumSubscription)
         {
             if (forumSubscription == null)
@@ -1143,15 +830,8 @@ namespace SmartStore.Services.Forums
             }
 
             _forumSubscriptionRepository.Insert(forumSubscription);
-
-            //event notification
-            _services.EventPublisher.EntityInserted(forumSubscription);
         }
 
-        /// <summary>
-        /// Updates the forum subscription
-        /// </summary>
-        /// <param name="forumSubscription">Forum subscription</param>
         public virtual void UpdateSubscription(ForumSubscription forumSubscription)
         {
             if (forumSubscription == null)
@@ -1160,17 +840,8 @@ namespace SmartStore.Services.Forums
             }
             
             _forumSubscriptionRepository.Update(forumSubscription);
-
-            //event notification
-            _services.EventPublisher.EntityUpdated(forumSubscription);
         }
 
-        /// <summary>
-        /// Check whether customer is allowed to create new topics
-        /// </summary>
-        /// <param name="customer">Customer</param>
-        /// <param name="forum">Forum</param>
-        /// <returns>True if allowed, otherwise false</returns>
         public virtual bool IsCustomerAllowedToCreateTopic(Customer customer, Forum forum)
         {
             if (forum == null)
@@ -1196,12 +867,6 @@ namespace SmartStore.Services.Forums
             return true;
         }
 
-        /// <summary>
-        /// Check whether customer is allowed to edit topic
-        /// </summary>
-        /// <param name="customer">Customer</param>
-        /// <param name="topic">Topic</param>
-        /// <returns>True if allowed, otherwise false</returns>
         public virtual bool IsCustomerAllowedToEditTopic(Customer customer, ForumTopic topic)
         {
             if (topic == null)
@@ -1233,12 +898,6 @@ namespace SmartStore.Services.Forums
             return false;
         }
 
-        /// <summary>
-        /// Check whether customer is allowed to move topic
-        /// </summary>
-        /// <param name="customer">Customer</param>
-        /// <param name="topic">Topic</param>
-        /// <returns>True if allowed, otherwise false</returns>
         public virtual bool IsCustomerAllowedToMoveTopic(Customer customer, ForumTopic topic)
         {
             if (topic == null)
@@ -1264,12 +923,6 @@ namespace SmartStore.Services.Forums
             return false;
         }
 
-        /// <summary>
-        /// Check whether customer is allowed to delete topic
-        /// </summary>
-        /// <param name="customer">Customer</param>
-        /// <param name="topic">Topic</param>
-        /// <returns>True if allowed, otherwise false</returns>
         public virtual bool IsCustomerAllowedToDeleteTopic(Customer customer, ForumTopic topic)
         {
             if (topic == null)
@@ -1301,12 +954,6 @@ namespace SmartStore.Services.Forums
             return false;
         }
 
-        /// <summary>
-        /// Check whether customer is allowed to create new post
-        /// </summary>
-        /// <param name="customer">Customer</param>
-        /// <param name="topic">Topic</param>
-        /// <returns>True if allowed, otherwise false</returns>
         public virtual bool IsCustomerAllowedToCreatePost(Customer customer, ForumTopic topic)
         {
             if (topic == null)
@@ -1327,12 +974,6 @@ namespace SmartStore.Services.Forums
             return true;
         }
 
-        /// <summary>
-        /// Check whether customer is allowed to edit post
-        /// </summary>
-        /// <param name="customer">Customer</param>
-        /// <param name="post">Topic</param>
-        /// <returns>True if allowed, otherwise false</returns>
         public virtual bool IsCustomerAllowedToEditPost(Customer customer, ForumPost post)
         {
             if (post == null)
@@ -1363,13 +1004,7 @@ namespace SmartStore.Services.Forums
 
             return false;
         }
-        
-        /// <summary>
-        /// Check whether customer is allowed to delete post
-        /// </summary>
-        /// <param name="customer">Customer</param>
-        /// <param name="post">Topic</param>
-        /// <returns>True if allowed, otherwise false</returns>
+
         public virtual bool IsCustomerAllowedToDeletePost(Customer customer, ForumPost post)
         {
             if (post == null)
@@ -1401,11 +1036,6 @@ namespace SmartStore.Services.Forums
             return false;
         }
 
-        /// <summary>
-        /// Check whether customer is allowed to set topic priority
-        /// </summary>
-        /// <param name="customer">Customer</param>
-        /// <returns>True if allowed, otherwise false</returns>
         public virtual bool IsCustomerAllowedToSetTopicPriority(Customer customer)
         {
             if (customer == null)
@@ -1426,11 +1056,6 @@ namespace SmartStore.Services.Forums
             return false;
         }
 
-        /// <summary>
-        /// Check whether customer is allowed to watch topics
-        /// </summary>
-        /// <param name="customer">Customer</param>
-        /// <returns>True if allowed, otherwise false</returns>
         public virtual bool IsCustomerAllowedToSubscribe(Customer customer)
         {
             if (customer == null)
@@ -1446,13 +1071,6 @@ namespace SmartStore.Services.Forums
             return true;
         }
 
-        /// <summary>
-        /// Calculates topic page index by post identifier
-        /// </summary>
-        /// <param name="forumTopicId">Forum topic identifier</param>
-        /// <param name="pageSize">Page size</param>
-        /// <param name="postId">Post identifier</param>
-        /// <returns>Page index</returns>
         public virtual int CalculateTopicPageIndex(int forumTopicId, int pageSize, int postId)
         {
             int pageIndex = 0;
@@ -1471,7 +1089,5 @@ namespace SmartStore.Services.Forums
 
             return pageIndex;
         }
-
-		#endregion
     }
 }

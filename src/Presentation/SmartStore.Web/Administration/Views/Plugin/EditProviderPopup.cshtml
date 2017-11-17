@@ -2,29 +2,20 @@
 @model SmartStore.Web.Framework.Plugins.ProviderModel
 
 @{
-    Layout = "~/Administration/Views/Shared/_AdminPopupLayout.cshtml";
-}
-
-@{    
+    Layout = "_AdminPopupLayout";   
     ViewBag.Title = T("Common.Edit") + ": " + Model.FriendlyName.Truncate(30, "...");
-}
-
-@if (ViewBag.RefreshPage == true)
-{
-	<script type="text/javascript">
-		try { window.opener.document.getElementById('@(ViewBag.btnId)').click(); }
-		catch (e) { }
-        window.close();
-	</script>
-	
-	return;
 }
 
 @using (Html.BeginForm())
 {
     <div class="section-header">
         <div class="title">
-			<img src="@Url.Content(Model.IconUrl)" class="img-responsive" style="max-height: 32px; margin-right: 3px" alt="@Model.FriendlyName" />
+
+            @if (Model.IconUrl.HasValue())
+            {
+                <img src="@Url.Content(Model.IconUrl)" class="img-responsive" style="max-height: 32px; margin-right: 3px" alt="@Model.FriendlyName" />
+            }
+			
 			@ViewBag.Title
         </div>
         <div class="options">

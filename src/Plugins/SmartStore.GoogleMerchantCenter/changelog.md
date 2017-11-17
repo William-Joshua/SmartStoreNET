@@ -1,5 +1,17 @@
 ﻿#Release Notes
 
+##Google Merchant Center (GMC) 3.0.0.1
+###Improvements
+* Perf: Added missing database indexes
+* Export yes/no rather than true/false
+###Bugfixes
+* "identifier_exists" did not follow specification
+
+##Google Merchant Center (GMC) 2.6.0.1
+###Bugfixes
+* Id should be unique when exporting attribute combinations as products
+* No special price exported when the special price period was not specified
+
 ##Google Merchant Center (GMC) 2.5.0.1
 ###Bugfixes
 * GMC feed does not generate the sale price if the sale price is set for a future date

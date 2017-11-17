@@ -1,11 +1,8 @@
 ﻿using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
-using System.Text;
 using System.Threading;
-using System.Threading.Tasks;
 using System.Web.Hosting;
 using SmartStore.Core.Async;
 using SmartStore.Core.Domain.Tasks;
@@ -19,6 +16,8 @@ namespace SmartStore.Services.Tasks
 {
 	public class DefaultTaskScheduler : DisposableObject, ITaskScheduler, IRegisteredObject
     {
+		private readonly ICacheManager _cache;
+
 		private bool _intervalFixed;
 		private int _sweepInterval;
 		private string _baseUrl;
@@ -26,14 +25,23 @@ namespace SmartStore.Services.Tasks
         private bool _shuttingDown;
 		private int _errCount;
 
-        public DefaultTaskScheduler()
+        public DefaultTaskScheduler(ICacheManager cache)
         {
+			_cache = cache;
+
 			_sweepInterval = 1;
 			_timer = new System.Timers.Timer();
             _timer.Elapsed += Elapsed;
 
+			Logger = NullLogger.Instance;
             HostingEnvironment.RegisterObject(this);
         }
+
+		public ILogger Logger
+		{
+			get;
+			set;
+		}
 
 		public int SweepIntervalMinutes
         {
@@ -88,18 +96,16 @@ namespace SmartStore.Services.Tasks
             get { return _timer.Enabled; }
         }
 
-		public CancellationTokenSource GetCancelTokenSourceFor(int scheduleTaskId)
+		public string GetAsyncStateKey(int scheduleTaskId)
 		{
-			var cts = AsyncState.Current.GetCancelTokenSource<ScheduleTask>(scheduleTaskId.ToString());
-			return cts;
+			return scheduleTaskId.ToString();
 		}
 
 		private string CreateAuthToken()
 		{
 			string authToken = Guid.NewGuid().ToString();
 
-			var cacheManager = EngineContext.Current.Resolve<ICacheManager>();
-			cacheManager.Set(GenerateAuthTokenCacheKey(authToken), true, TimeSpan.FromMinutes(1));
+			_cache.Put(GenerateAuthTokenCacheKey(authToken), true, TimeSpan.FromMinutes(1));
 
 			return authToken;
 		}
@@ -114,11 +120,10 @@ namespace SmartStore.Services.Tasks
             if (authToken.IsEmpty())
                 return false;
 
-			var cacheManager = EngineContext.Current.Resolve<ICacheManager>();
 			var cacheKey = GenerateAuthTokenCacheKey(authToken);
-			if (cacheManager.Contains(cacheKey))
+			if (_cache.Contains(cacheKey))
 			{
-				cacheManager.Remove(cacheKey);
+				_cache.Remove(cacheKey);
 				return true;
 			}
 
@@ -127,14 +132,14 @@ namespace SmartStore.Services.Tasks
 
         public void RunSingleTask(int scheduleTaskId, IDictionary<string, string> taskParameters = null)
         {
-			string query = "";
+			taskParameters = taskParameters ?? new Dictionary<string, string>();
 
-			if (taskParameters != null && taskParameters.Any())
-			{
-                var qs = new QueryString();
-				taskParameters.Each(x => qs.Add(x.Key, x.Value));
-				query = qs.ToString();
-			}
+			// User executes task in backend explicitly
+			taskParameters["Explicit"] = "true";
+
+            var qs = new QueryString();
+			taskParameters.Each(x => qs.Add(x.Key, x.Value));
+			var query = qs.ToString();
 
 			CallEndpoint(new Uri("{0}/Execute/{1}{2}".FormatInvariant(_baseUrl, scheduleTaskId, query)));
         }
@@ -187,10 +192,7 @@ namespace SmartStore.Services.Tasks
 					{
 						// 10 failed attempts in succession. Stop the timer!
 						this.Stop();
-						using (var logger = new TraceLogger())
-						{
-							logger.Information("Stopping TaskScheduler sweep timer. Too many failed requests in succession.");
-						}
+						Logger.Info("Stopping TaskScheduler sweep timer. Too many failed requests in succession.");
 					}
 				}
 				else
@@ -198,10 +200,7 @@ namespace SmartStore.Services.Tasks
 					_errCount = 0;
 					var response = t.Result;
 
-					//using (var logger = new TraceLogger())
-					//{
-					//	logger.Debug("TaskScheduler Sweep called successfully: {0}".FormatCurrent(response.GetResponseStream().AsString()));
-					//}
+					//_logger.DebugFormat("TaskScheduler Sweep called successfully: {0}", response.GetResponseStream().AsString());
 
 					response.Dispose();
 				}
@@ -210,29 +209,32 @@ namespace SmartStore.Services.Tasks
 
 		private void HandleException(AggregateException exception, Uri uri)
 		{
-			using (var logger = new TraceLogger())
-			{
-				string msg = "Error while calling TaskScheduler endpoint '{0}'.".FormatInvariant(uri.OriginalString);
-				var wex = exception.InnerExceptions.OfType<WebException>().FirstOrDefault();
+			string msg = "Error while calling TaskScheduler endpoint '{0}'.".FormatInvariant(uri.OriginalString);
+			var wex = exception.InnerExceptions.OfType<WebException>().FirstOrDefault();
 
-				if (wex == null)
+			if (wex == null)
+			{
+				Logger.Error(exception.InnerException, msg);
+			}
+			else if (wex.Response == null)
+			{
+				Logger.Error(wex, msg);
+			}
+			else
+			{
+				using (var response = wex.Response as HttpWebResponse)
 				{
-					logger.Error(msg, exception.InnerException);
-				}
-				else if (wex.Response == null)
-				{
-					logger.Error(msg, wex);
-				}
-				else
-				{
-					using (var response = wex.Response as HttpWebResponse)
+					if (response != null)
 					{
-						if (response != null)
+						var statusCode = (int)response.StatusCode;
+						if (statusCode < 500)
 						{
-							msg += " HTTP {0}, {1}".FormatCurrent((int)response.StatusCode, response.StatusDescription);
+							// Any internal server error (>= 500) already handled by TaskSchedulerController's exception filter
+							msg += " HTTP {0}, {1}".FormatCurrent(statusCode, response.StatusDescription);
+							Logger.Error(msg);
 						}
-						logger.Error(msg);
 					}
+					
 				}
 			}
 		}
@@ -259,5 +261,4 @@ namespace SmartStore.Services.Tasks
             HostingEnvironment.UnregisterObject(this); 
         }
     }
-
 }

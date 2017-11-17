@@ -1,170 +1,225 @@
 ﻿using System;
-using System.Collections.Generic;
+using System.Collections.Specialized;
 using System.IO;
 using System.Linq;
-using System.Text;
+using System.Threading.Tasks;
 using System.Web;
-using ImageResizer;
+using System.Web.Hosting;
 using SmartStore.Core;
 using SmartStore.Core.Domain.Media;
-using SmartStore.Services.Stores;
+using SmartStore.Core.IO;
+using SmartStore.Core.Logging;
 
 namespace SmartStore.Services.Media
 {
-
-    public class ImageCache : IImageCache
+	public class ImageCache : IImageCache
     {
-        private const int MULTIPLE_THUMB_DIRECTORIES_LENGTH = 4;
+		public const string IdFormatString = "0000000";
 
-        private readonly MediaSettings _mediaSettings;
-        private readonly IWebHelper _webHelper;
-        private readonly DirectoryInfo _cacheRootDir;
+		private const int MULTIPLE_THUMB_DIRECTORIES_LENGTH = 4;
+
+		private readonly MediaSettings _mediaSettings;
+		private readonly string _thumbsRootDir;
 		private readonly IStoreContext _storeContext;
 		private readonly HttpContextBase _httpContext;
+		private readonly IMediaFileSystem _fileSystem;
+		private readonly IImageProcessor _imageProcessor;
 
-        public ImageCache(MediaSettings mediaSettings, IWebHelper webHelper, IStoreContext storeContext, HttpContextBase httpContext)
+		public ImageCache(
+			MediaSettings mediaSettings, 
+			IStoreContext storeContext, 
+			HttpContextBase httpContext,
+			IMediaFileSystem fileSystem,
+			IImageProcessor imageProcessor)
         {
-            this._mediaSettings = mediaSettings;
-            this._webHelper = webHelper;
-			this._storeContext = storeContext;
-			this._httpContext = httpContext;
+            _mediaSettings = mediaSettings;
+			_storeContext = storeContext;
+			_httpContext = httpContext;
+			_fileSystem = fileSystem;
+			_imageProcessor = imageProcessor;
 
-            _cacheRootDir = new DirectoryInfo(_webHelper.MapPath("~/Media/Thumbs"));
-        }
+			_thumbsRootDir = "Thumbs/";
 
-        public void AddImageToCache(CachedImageResult cachedImage, byte[] buffer)
+			Logger = NullLogger.Instance;
+		}
+
+		public ILogger Logger
+		{
+			get;
+			set;
+		}
+
+		public void Put(CachedImageResult cachedImage, byte[] buffer)
+		{
+			if (PreparePut(cachedImage, buffer))
+			{
+				var path = BuildPath(cachedImage.Path);
+
+				_fileSystem.WriteAllBytes(path, buffer);
+
+				cachedImage.Exists = true;
+				cachedImage.File = _fileSystem.GetFile(path);
+			}
+		}
+
+		public Task PutAsync(CachedImageResult cachedImage, byte[] buffer)
+		{
+			if (PreparePut(cachedImage, buffer))
+			{
+				var path = BuildPath(cachedImage.Path);
+
+				// save file
+				var t = _fileSystem.WriteAllBytesAsync(path, buffer);
+				t.ContinueWith(x =>
+				{
+					// Refresh info
+					cachedImage.Exists = true;
+					cachedImage.File = _fileSystem.GetFile(path);
+				});
+
+				return t;
+			}
+
+			return Task.FromResult(false);
+		}
+
+		private bool PreparePut(CachedImageResult cachedImage, byte[] buffer)
+		{
+			Guard.NotNull(cachedImage, nameof(cachedImage));
+
+			if (buffer == null || buffer.Length == 0)
+			{
+				return false;
+			}
+
+			if (cachedImage.Exists)
+			{
+				_fileSystem.DeleteFile(BuildPath(cachedImage.Path));
+			}
+
+			// create folder if needed
+			string imageDir = System.IO.Path.GetDirectoryName(cachedImage.Path);
+			if (imageDir.HasValue())
+			{
+				_fileSystem.TryCreateFolder(BuildPath(imageDir));
+			}
+
+			return true;
+		}
+
+        public virtual CachedImageResult Get(int? pictureId, string seoFileName, string extension, ProcessImageQuery query = null)
         {
-            Guard.ArgumentNotNull(() => cachedImage);
+			Guard.NotEmpty(extension, nameof(extension));
 
-            if (buffer == null || buffer.Length == 0)
-            {
-                throw new ArgumentException("The image buffer cannot be empty.", "buffer");
-            }
+			extension = query?.GetResultExtension() ?? extension.TrimStart('.').ToLower();
+			var imagePath = GetCachedImagePath(pictureId, seoFileName, extension, query);
 
-            if (cachedImage.Exists)
-            {
-                File.Delete(cachedImage.LocalPath);
-            }
+			var file = _fileSystem.GetFile(BuildPath(imagePath));
 
-            // create directory if necessary
-            string imageDir = Path.GetDirectoryName(cachedImage.LocalPath);
-            if (imageDir.HasValue() && !System.IO.Directory.Exists(imageDir))
-            {
-                System.IO.Directory.CreateDirectory(imageDir);
-            }
-
-            // save file
-            File.WriteAllBytes(cachedImage.LocalPath, buffer);
-        }
-
-        public virtual CachedImageResult GetCachedImage(int? pictureId, string seoFileName, string extension, object settings = null)
-        {
-            var imagePath = this.GetCachedImagePath(pictureId, seoFileName, extension, ImageResizerUtils.CreateResizeSettings(settings));
-            var localPath = this.GetImageLocalPath(imagePath);
-
-            var result = new CachedImageResult
-            {
-                Path = imagePath, //"Media/Thumbs/" + imagePath,
-                LocalPath = localPath,
-                FileName = Path.GetFileName(imagePath),
-                Extension = GetCleanFileExtension(imagePath),
-                Exists = File.Exists(localPath)
-            };
-
+			var result = new CachedImageResult(file)
+			{
+				Path = imagePath,
+				Extension = extension,
+				IsRemote = _fileSystem.IsCloudStorage
+			};
+			
             return result;
         }
 
-        public virtual string GetImageUrl(string imagePath, string storeLocation = null)
+		public virtual Stream Open(CachedImageResult cachedImage)
+		{
+			Guard.NotNull(cachedImage, nameof(cachedImage));
+
+			return _fileSystem.GetFile(BuildPath(cachedImage.Path)).OpenRead();
+		}
+
+        public virtual string GetPublicUrl(string imagePath)
         {
 			if (imagePath.IsEmpty())
                 return null;
 
-			var root = storeLocation;
+			return _fileSystem.GetPublicUrl(BuildPath(imagePath)).EmptyNull();
+		}
 
-			if (root.IsEmpty())
-			{
-				var cdnUrl = _storeContext.CurrentStore.ContentDeliveryNetwork;
-				if (cdnUrl.HasValue() && !_httpContext.IsDebuggingEnabled && !_httpContext.Request.IsLocal)
-				{
-					root = cdnUrl;
-				}
-			}
+		public virtual void RefreshInfo(CachedImageResult cachedImage)
+		{
+			Guard.NotNull(cachedImage, nameof(cachedImage));
+			
+			var file = _fileSystem.GetFile(cachedImage.File.Path);
+			cachedImage.File = file;
+			cachedImage.Exists = file.Exists;
+		}
 
-			root = root.NullEmpty() ?? _httpContext.Request.ApplicationPath;
-			root = root.TrimEnd('/', '\\');
-			var url = root + "/Media/Thumbs/";
-
-            url = url + imagePath;
-            return url;
-        }
-
-        public virtual void DeleteCachedImages(Picture picture)
+		public virtual void Delete(Picture picture)
         {
-            string filter = string.Format("{0}*.*", picture.Id.ToString("0000000"));
-            
-            var files = _cacheRootDir.EnumerateFiles(filter, SearchOption.AllDirectories);
-            foreach (var file in files)
-            {
-                file.Delete();
-            }
-        }
+            var filter = string.Format("{0}*.*", picture.Id.ToString(IdFormatString));
 
-        public virtual void DeleteCachedImages()
+			var files = _fileSystem.SearchFiles(_thumbsRootDir, filter);
+			foreach (var file in files)
+			{
+				_fileSystem.DeleteFile(file);
+			}
+		}
+
+        public virtual void Clear()
         {
             for (int i = 0; i < 10; i++)
             {
                 try
                 {
-                    foreach (var file in _cacheRootDir.GetFiles())
+                    foreach (var file in _fileSystem.ListFiles(_thumbsRootDir))
                     {
 						if (!file.Name.IsCaseInsensitiveEqual("placeholder") && !file.Name.IsCaseInsensitiveEqual("placeholder.txt"))
 						{
-							file.Delete();
+							_fileSystem.DeleteFile(file.Path);
 						}
                     }
-                    foreach (var dir in _cacheRootDir.GetDirectories())
+                    foreach (var dir in _fileSystem.ListFolders(_thumbsRootDir))
                     {
-                        dir.Delete(true);
-                    }
+						_fileSystem.DeleteFolder(dir.Path);
+					}
+
                     return;
                 }
-                catch
+                catch (Exception ex)
                 {
+					Logger.Error(ex);
                 }
             }
         }
 
         public void CacheStatistics(out long fileCount, out long totalSize)
         {
-            var allFiles = _cacheRootDir.GetFiles("*.*", SearchOption.AllDirectories);
-			var allImageFiles = allFiles.Where(x => !x.Name.IsCaseInsensitiveEqual("placeholder") && !x.Name.IsCaseInsensitiveEqual("placeholder.txt"));
+			fileCount = 0;
+			totalSize = 0;
 
-			fileCount = allImageFiles.Count();
+			if (!_fileSystem.FolderExists(_thumbsRootDir))
+			{
+				return;
+			}
 
-            if (fileCount == 0)
-                totalSize = 0;
-            else
-				totalSize = allImageFiles.Sum(x => x.Length);
+			fileCount = _fileSystem.SearchFiles(_thumbsRootDir, "*.*").Count();
+			totalSize = _fileSystem.ListFolders(_thumbsRootDir).Sum(x => x.Size);
         }
 
-        #region Utils
+		#region Utils
 
-        /// <summary>
-        /// Returns the file name with the subfolder (when multidirs are enabled)
-        /// </summary>
-        /// <param name="picture"></param>
-        /// <param name="settings"></param>
-        /// <returns></returns>
-        internal string GetCachedImagePath(int? pictureId, string seoFileName, string extension, ResizeSettings settings = null)
+		/// <summary>
+		/// Returns the file name with the subfolder (when multidirs are enabled)
+		/// </summary>
+		/// <param name="pictureId"></param>
+		/// <param name="seoFileName">File name without extension</param>
+		/// <param name="extension">Dot-less file extension</param>
+		/// <param name="query"></param>
+		/// <returns></returns>
+		private string GetCachedImagePath(int? pictureId, string seoFileName, string extension, ProcessImageQuery query = null)
         {
-            Guard.ArgumentNotEmpty(extension, "extension");
-
             string imageFileName = null;
 
             string firstPart = "";
             if (pictureId.GetValueOrDefault() > 0)
             {
-                firstPart = pictureId.Value.ToString("0000000") + (seoFileName.IsEmpty() ? "" : "-");
+                firstPart = pictureId.Value.ToString(IdFormatString) + (seoFileName.IsEmpty() ? "" : "-");
             }
 
             if (firstPart.IsEmpty() && seoFileName.IsEmpty())
@@ -174,63 +229,33 @@ namespace SmartStore.Services.Media
             }
 
             seoFileName = seoFileName.EmptyNull();
-            extension = extension.TrimStart('.');
 
-            if (!NeedsProcessing(settings))
+            if (query == null || !query.NeedsProcessing())
             {
-                imageFileName = "{0}{1}.{2}".FormatInvariant(firstPart, seoFileName, extension);
+                imageFileName = String.Concat(firstPart, seoFileName);
             }
             else
             {
-                string hashedProps = CreateSettingsHash(settings);
-                imageFileName = "{0}{1}-{2}.{3}".FormatInvariant(firstPart, seoFileName, hashedProps, extension);
-            }
+				imageFileName = String.Concat(firstPart, seoFileName, query.CreateHash());
+			}
 
-            if (_mediaSettings.MultipleThumbDirectories)
+            if (_mediaSettings.MultipleThumbDirectories && imageFileName != null && imageFileName.Length > MULTIPLE_THUMB_DIRECTORIES_LENGTH)
             {
-                //get the first four letters of the file name
-                var fileNameWithoutExtension = Path.GetFileNameWithoutExtension(imageFileName);
-                if (fileNameWithoutExtension != null && fileNameWithoutExtension.Length > MULTIPLE_THUMB_DIRECTORIES_LENGTH)
-                {
-                    var subDirectoryName = fileNameWithoutExtension.Substring(0, MULTIPLE_THUMB_DIRECTORIES_LENGTH);
-                    imageFileName = subDirectoryName + "/" + imageFileName;
-                }
+                // Get the first four letters of the file name
+                var subDirectoryName = imageFileName.Substring(0, MULTIPLE_THUMB_DIRECTORIES_LENGTH);
+                imageFileName = String.Concat(subDirectoryName, "/", imageFileName);
             }
 
-            return imageFileName;
+            return String.Concat(imageFileName, ".", extension);
         }
 
-        private string CreateSettingsHash(ResizeSettings settings)
-        {
-            if (settings.Count == 2 && settings.MaxWidth > 0 && settings.MaxWidth == settings.MaxHeight)
-            {
-                return settings.MaxWidth.ToString();
-            }
-			return settings.ToString().Hash(Encoding.ASCII);
-        }
+		private string BuildPath(string imagePath)
+		{
+			if (imagePath.IsEmpty())
+				return null;
 
-        private bool NeedsProcessing(ResizeSettings settings)
-        {
-            return settings != null && settings.Count > 0;
-        }
-
-        private string GetImageLocalPath(string imagePath)
-        {
-            if (imagePath.IsEmpty())
-                return null;
-            var imageFilePath = Path.Combine(_cacheRootDir.FullName, imagePath.Replace('/', '\\'));
-            return imageFilePath;
-        }
-
-        private static string GetCleanFileExtension(string url)
-        {
-            var extension = Path.GetExtension(url);
-            if (extension != null)
-            {
-                return extension.Replace(".", "").ToLower();
-            }
-            return string.Empty;
-        }
+			return String.Concat(_thumbsRootDir, imagePath);
+		}
 
         #endregion
 

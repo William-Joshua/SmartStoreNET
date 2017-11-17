@@ -19,7 +19,7 @@ namespace SmartStore.Services.Directory
         private const string COUNTRIES_ALL_KEY = "SmartStore.country.all-{0}";
         private const string COUNTRIES_BILLING_KEY = "SmartStore.country.billing-{0}";
         private const string COUNTRIES_SHIPPING_KEY = "SmartStore.country.shipping-{0}";
-        private const string COUNTRIES_PATTERN_KEY = "SmartStore.country.";
+        private const string COUNTRIES_PATTERN_KEY = "SmartStore.country.*";
         #endregion
         
         #region Fields
@@ -65,9 +65,6 @@ namespace SmartStore.Services.Directory
             _countryRepository.Delete(country);
 
             _requestCache.RemoveByPattern(COUNTRIES_PATTERN_KEY);
-
-            //event notification
-            _eventPublisher.EntityDeleted(country);
         }
 
         /// <summary>
@@ -222,9 +219,6 @@ namespace SmartStore.Services.Directory
             _countryRepository.Insert(country);
 
             _requestCache.RemoveByPattern(COUNTRIES_PATTERN_KEY);
-
-            //event notification
-            _eventPublisher.EntityInserted(country);
         }
 
         /// <summary>
@@ -239,9 +233,6 @@ namespace SmartStore.Services.Directory
             _countryRepository.Update(country);
 
             _requestCache.RemoveByPattern(COUNTRIES_PATTERN_KEY);
-
-            //event notification
-            _eventPublisher.EntityUpdated(country);
         }
 
         #endregion

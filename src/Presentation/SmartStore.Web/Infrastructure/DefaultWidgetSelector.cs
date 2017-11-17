@@ -15,13 +15,12 @@ using SmartStore.Services.Topics;
 using SmartStore.Web.Framework.UI;
 using SmartStore.Web.Infrastructure.Cache;
 using SmartStore.Web.Models.Topics;
+using SmartStore.Core.Domain.Topics;
 
 namespace SmartStore.Web.Infrastructure
-{
-    
+{  
     public partial class DefaultWidgetSelector : IWidgetSelector
     {
-
         #region Fields
 
         private readonly IWidgetService _widgetService;
@@ -147,6 +146,7 @@ namespace SmartStore.Web.Infrastructure
 									} }
 								}
 							};
+
 							map.Add(zone, routeInfo);
 						}
 					}
@@ -188,6 +188,13 @@ namespace SmartStore.Web.Infrastructure
 				var zoneWidgets = topicsByZone[widgetZone.ToLower()];
 				foreach (var topicWidget in zoneWidgets)
 				{
+					// Handle OC announcement
+					var topicWidgetModel = topicWidget.RouteValues["model"] as TopicWidgetModel;
+					if (topicWidgetModel != null)
+					{
+						_services.DisplayControl.Announce(new Topic { Id = topicWidgetModel.Id });
+					}
+
 					yield return topicWidget;
 				}
 			}
@@ -208,21 +215,19 @@ namespace SmartStore.Web.Infrastructure
 
 			#endregion
         }
-
-		class TopicWidgetStub
-		{
-			public int Id { get; set; }
-			public string[] WidgetZones { get; set; }
-			public string SystemName { get; set; }
-			public bool WrapContent { get; set; }
-			public bool ShowTitle { get; set; }
-			public bool Bordered { get; set; }
-			public string Title { get; set; }
-            public string TitleTag { get; set; }
-			public string Body { get; set; }
-			public int Priority { get; set; }
-		}
-
     }
 
+	public class TopicWidgetStub
+	{
+		public int Id { get; set; }
+		public string[] WidgetZones { get; set; }
+		public string SystemName { get; set; }
+		public bool WrapContent { get; set; }
+		public bool ShowTitle { get; set; }
+		public bool Bordered { get; set; }
+		public string Title { get; set; }
+		public string TitleTag { get; set; }
+		public string Body { get; set; }
+		public int Priority { get; set; }
+	}
 }

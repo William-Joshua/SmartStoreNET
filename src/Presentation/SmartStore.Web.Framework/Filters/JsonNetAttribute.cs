@@ -1,27 +1,21 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Diagnostics.CodeAnalysis;
-using System.Linq;
-using System.Net;
-using System.Runtime.InteropServices;
-using System.Security;
-using System.Threading;
-using System.Web;
 using System.Web.Mvc;
-using SmartStore.Core;
+using Newtonsoft.Json;
 using SmartStore.Core.Data;
-using SmartStore.Core.Logging;
 using SmartStore.Services.Helpers;
 using SmartStore.Web.Framework.Modelling;
 
 namespace SmartStore.Web.Framework.Filters
 {
-	public class JsonNetAttribute : ActionFilterAttribute
+	public class JsonNetAttribute : FilterAttribute, IActionFilter
 	{
 		public Lazy<IDateTimeHelper> DateTimeHelper { get; set; }
 
-		[SuppressMessage("ReSharper", "PossibleNullReferenceException")]
-		public override void OnActionExecuted(ActionExecutedContext filterContext)
+		public void OnActionExecuting(ActionExecutingContext filterContext)
+		{
+		}
+
+		public void OnActionExecuted(ActionExecutedContext filterContext)
 		{
 			if (!DataSettings.DatabaseIsInstalled())
 				return;
@@ -29,22 +23,37 @@ namespace SmartStore.Web.Framework.Filters
 			if (filterContext == null || filterContext.HttpContext == null || filterContext.HttpContext.Request == null)
 				return;
 
-			// don't apply filter to child methods
+			// Don't apply filter to child methods.
 			if (filterContext.IsChildAction)
 				return;
 
-			// handle JsonResult only
+			// Hndle JsonResult only.
 			if (filterContext.Result.GetType() != typeof(JsonResult))
 				return;
 
-	        var jsonResult = filterContext.Result as JsonResult;
+			var jsonResult = filterContext.Result as JsonResult;
+			var settings = new JsonSerializerSettings
+			{
+				MissingMemberHandling = MissingMemberHandling.Ignore,
+				TypeNameHandling = TypeNameHandling.Objects,
+				ReferenceLoopHandling = ReferenceLoopHandling.Ignore,
+				DateTimeZoneHandling = DateTimeZoneHandling.RoundtripKind,
+				DateFormatHandling = DateFormatHandling.MicrosoftDateFormat,
 
-			filterContext.Result = new JsonNetResult(DateTimeHelper.Value)
+				// We cannot ignore null. Client template of several Telerik grids would fail.
+				//NullValueHandling = NullValueHandling.Ignore,
+
+				MaxDepth = 32
+			};
+
+			filterContext.Result = new JsonNetResult(DateTimeHelper.Value, settings)
 			{
 				Data = jsonResult.Data,
 				ContentType = jsonResult.ContentType,
 				ContentEncoding = jsonResult.ContentEncoding,
-				JsonRequestBehavior = jsonResult.JsonRequestBehavior
+				JsonRequestBehavior = jsonResult.JsonRequestBehavior,
+				MaxJsonLength = jsonResult.MaxJsonLength,
+				RecursionLimit = jsonResult.RecursionLimit
 			};
 		}
 	}

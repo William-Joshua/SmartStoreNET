@@ -1,5 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Data.Entity;
+using System.Drawing;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -8,7 +10,12 @@ using SmartStore.Core.Async;
 using SmartStore.Core.Data;
 using SmartStore.Core.Domain.Catalog;
 using SmartStore.Core.Domain.DataExchange;
+using SmartStore.Core.Domain.Localization;
+using SmartStore.Core.Domain.Media;
+using SmartStore.Core.Domain.Seo;
+using SmartStore.Core.Domain.Stores;
 using SmartStore.Core.Events;
+using SmartStore.Data.Utilities;
 using SmartStore.Services.DataExchange.Import;
 using SmartStore.Services.Localization;
 using SmartStore.Services.Media;
@@ -73,10 +80,10 @@ namespace SmartStore.Services.Catalog.Importer
 		protected override void Import(ImportExecuteContext context)
 		{
 			var srcToDestId = new Dictionary<int, ImportProductMapping>();
-
+			var importStartTime = DateTime.UtcNow;
 			var templateViewPaths = _productTemplateService.GetAllProductTemplates().ToDictionarySafe(x => x.ViewPath, x => x.Id);
 
-			using (var scope = new DbContextScope(ctx: _productRepository.Context, autoDetectChanges: false, proxyCreation: false, validateOnSave: false))
+			using (var scope = new DbContextScope(ctx: _productRepository.Context, hooksEnabled: false, autoDetectChanges: false, proxyCreation: false, validateOnSave: false))
 			{
 				var segmenter = context.DataSegmenter;
 
@@ -86,17 +93,24 @@ namespace SmartStore.Services.Catalog.Importer
 				{
 					var batch = segmenter.GetCurrentBatch<Product>();
 
-					// Perf: detach all entities
-					_productRepository.Context.DetachAll(false);
+					// Perf: detach entities
+					_productRepository.Context.DetachEntities(x =>
+					{
+						return x is Product || x is UrlRecord || x is StoreMapping || x is ProductVariantAttribute || x is LocalizedProperty ||
+							   x is ProductBundleItem || x is ProductCategory || x is ProductManufacturer || x is Category || x is Manufacturer ||
+							   x is ProductPicture || x is Picture || x is ProductTag || x is TierPrice;
+					});
+					//_productRepository.Context.DetachAll(true);
 
 					context.SetProgress(segmenter.CurrentSegmentFirstRowIndex - 1, segmenter.TotalRows);
 
 					// ===========================================================================
 					// 1.) Import products
 					// ===========================================================================
+					int savedProducts = 0;
 					try
 					{
-						ProcessProducts(context, batch, templateViewPaths, srcToDestId);
+						savedProducts = ProcessProducts(context, batch, templateViewPaths, srcToDestId);
 					}
 					catch (Exception exception)
 					{
@@ -108,8 +122,8 @@ namespace SmartStore.Services.Catalog.Importer
 					batch = batch.Where(x => x.Entity != null && !x.IsTransient).ToArray();
 
 					// update result object
-					context.Result.NewRecords += batch.Count(x => x.IsNew && !x.IsTransient);
-					context.Result.ModifiedRecords += batch.Count(x => !x.IsNew && !x.IsTransient);
+					context.Result.NewRecords += batch.Count(x => x.IsNew);
+					context.Result.ModifiedRecords += Math.Max(0, savedProducts - context.Result.NewRecords);
 
 					// ===========================================================================
 					// 2.) Import SEO Slugs
@@ -229,6 +243,11 @@ namespace SmartStore.Services.Catalog.Importer
 						}
 					}
 				}
+
+				// ===========================================================================
+				// 9.) PostProcess: normalization
+				// ===========================================================================
+				DataNormalizer.FixProductMainPictureIds(_productRepository.Context, importStartTime);
 			}
 		}
 
@@ -240,11 +259,9 @@ namespace SmartStore.Services.Catalog.Importer
 		{
 			_productRepository.AutoCommitEnabled = false;
 
-			Product lastInserted = null;
-			Product lastUpdated = null;
-			var defaultTemplateId = templateViewPaths["ProductTemplate.Simple"];
-
-			foreach (var row in batch)
+			var defaultTemplateId = templateViewPaths["Product"];
+            
+            foreach (var row in batch)
 			{
 				Product product = null;
 				var id = row.GetDataValue<int>("Id");
@@ -258,7 +275,7 @@ namespace SmartStore.Services.Catalog.Importer
 						switch (keyName)
 						{
 							case "Id":
-								product = _productService.GetProductById(id);
+								product = _productRepository.GetById(id); // get it uncached
 								break;
 							case "Sku":
 								product = _productService.GetProductBySku(keyValue);
@@ -366,8 +383,9 @@ namespace SmartStore.Services.Catalog.Importer
 				row.SetProperty(context.Result, (x) => x.BackorderModeId);
 				row.SetProperty(context.Result, (x) => x.AllowBackInStockSubscriptions);
 				row.SetProperty(context.Result, (x) => x.OrderMinimumQuantity, 1);
-				row.SetProperty(context.Result, (x) => x.OrderMaximumQuantity, 10000);
-				row.SetProperty(context.Result, (x) => x.AllowedQuantities);
+				row.SetProperty(context.Result, (x) => x.OrderMaximumQuantity, 100);
+                row.SetProperty(context.Result, (x) => x.HideQuantityControl);
+                row.SetProperty(context.Result, (x) => x.AllowedQuantities);
 				row.SetProperty(context.Result, (x) => x.DisableBuyButton);
 				row.SetProperty(context.Result, (x) => x.DisableWishlistButton);
 				row.SetProperty(context.Result, (x) => x.AvailableForPreOrder);
@@ -403,15 +421,14 @@ namespace SmartStore.Services.Catalog.Importer
 				// With new entities, "LimitedToStores" is an implicit field, meaning
 				// it has to be set to true by code if it's absent but "StoreIds" exists.
 				row.SetProperty(context.Result, (x) => x.LimitedToStores, !row.GetDataValue<List<int>>("StoreIds").IsNullOrEmpty());
+				row.SetProperty(context.Result, (x) => x.CustomsTariffNumber);
+				row.SetProperty(context.Result, (x) => x.CountryOfOriginId);
 
 				string tvp;
 				if (row.TryGetDataValue("ProductTemplateViewPath", out tvp, row.IsTransient))
 				{
 					product.ProductTemplateId = (tvp.HasValue() && templateViewPaths.ContainsKey(tvp) ? templateViewPaths[tvp] : defaultTemplateId);
 				}
-
-				row.SetProperty(context.Result, (x) => x.CreatedOnUtc, UtcNow);
-				product.UpdatedOnUtc = UtcNow;
 
 				if (id != 0 && !srcToDestId.ContainsKey(id))
 				{
@@ -421,12 +438,10 @@ namespace SmartStore.Services.Catalog.Importer
 				if (row.IsTransient)
 				{
 					_productRepository.Insert(product);
-					lastInserted = product;
 				}
 				else
 				{
-					_productRepository.Update(product);
-					lastUpdated = product;
+					//_productRepository.Update(product); // unnecessary: we use DetectChanges()
 				}
 			}
 
@@ -440,17 +455,6 @@ namespace SmartStore.Services.Catalog.Importer
 
 				if (id != 0 && srcToDestId.ContainsKey(id))
 					srcToDestId[id].DestinationId = row.Entity.Id;
-			}
-
-			// Perf: notify only about LAST insertion and update
-			if (lastInserted != null)
-			{
-				_services.EventPublisher.EntityInserted(lastInserted);
-			}
-
-			if (lastUpdated != null)
-			{
-				_services.EventPublisher.EntityUpdated(lastUpdated);
 			}
 
 			return num;
@@ -477,7 +481,7 @@ namespace SmartStore.Services.Catalog.Importer
 						if (product != null)
 						{
 							product.ParentGroupedProductId = srcToDestId[parentGroupedProductId].DestinationId;
-							_productRepository.Update(product);
+							//_productRepository.Update(product);  // unnecessary: we use DetectChanges()
 						}
 					}
 				}
@@ -493,7 +497,6 @@ namespace SmartStore.Services.Catalog.Importer
 			// true, cause pictures must be saved and assigned an id prior adding a mapping.
 			_productPictureRepository.AutoCommitEnabled = true;
 
-			ProductPicture lastInserted = null;
 			var equalPictureId = 0;
 			var numberOfPictures = (context.ExtraData.NumberOfPictures ?? int.MaxValue);
 
@@ -541,7 +544,9 @@ namespace SmartStore.Services.Catalog.Importer
 
 							if (pictureBinary != null && pictureBinary.Length > 0)
 							{
-								var currentProductPictures = _productPictureRepository.TableUntracked.Expand(x => x.Picture)
+								var currentProductPictures = _productPictureRepository.TableUntracked
+									.Expand(x => x.Picture)
+									.Expand(x => x.Picture.MediaStorage)
 									.Where(x => x.ProductId == row.Entity.Id)
 									.ToList();
 
@@ -554,13 +559,14 @@ namespace SmartStore.Services.Catalog.Importer
 									displayOrder = (currentProductPictures.Any() ? currentProductPictures.Select(x => x.DisplayOrder).Max() : 0);
 								}
 
-								pictureBinary = _pictureService.ValidatePicture(pictureBinary);
+								var size = Size.Empty;
+								pictureBinary = _pictureService.ValidatePicture(pictureBinary, image.MimeType, out size);
 								pictureBinary = _pictureService.FindEqualPicture(pictureBinary, currentPictures, out equalPictureId);
 
 								if (pictureBinary != null && pictureBinary.Length > 0)
 								{
 									// no equal picture found in sequence
-									var newPicture = _pictureService.InsertPicture(pictureBinary, image.MimeType, seoName, true, false, false);
+									var newPicture = _pictureService.InsertPicture(pictureBinary, image.MimeType, seoName, true, size.Width, size.Height, false);
 									if (newPicture != null)
 									{
 										var mapping = new ProductPicture
@@ -571,7 +577,6 @@ namespace SmartStore.Services.Catalog.Importer
 										};
 
 										_productPictureRepository.Insert(mapping);
-										lastInserted = mapping;
 									}
 								}
 								else
@@ -591,19 +596,11 @@ namespace SmartStore.Services.Catalog.Importer
 					}
 				}
 			}
-
-			// Perf: notify only about LAST insertion and update
-			if (lastInserted != null)
-			{
-				_services.EventPublisher.EntityInserted(lastInserted);
-			}
 		}
 
 		protected virtual int ProcessProductManufacturers(ImportExecuteContext context, IEnumerable<ImportRow<Product>> batch)
 		{
 			_productManufacturerRepository.AutoCommitEnabled = false;
-
-			ProductManufacturer lastInserted = null;
 
 			foreach (var row in batch)
 			{
@@ -628,7 +625,6 @@ namespace SmartStore.Services.Catalog.Importer
 										DisplayOrder = 1
 									};
 									_productManufacturerRepository.Insert(productManufacturer);
-									lastInserted = productManufacturer;
 								}
 							}
 						}
@@ -643,18 +639,12 @@ namespace SmartStore.Services.Catalog.Importer
 			// commit whole batch at once
 			var num = _productManufacturerRepository.Context.SaveChanges();
 
-			// Perf: notify only about LAST insertion and update
-			if (lastInserted != null)
-				_services.EventPublisher.EntityInserted(lastInserted);
-
 			return num;
 		}
 
 		protected virtual int ProcessProductCategories(ImportExecuteContext context, IEnumerable<ImportRow<Product>> batch)
 		{
 			_productCategoryRepository.AutoCommitEnabled = false;
-
-			ProductCategory lastInserted = null;
 
 			foreach (var row in batch)
 			{
@@ -679,7 +669,6 @@ namespace SmartStore.Services.Catalog.Importer
 										DisplayOrder = 1
 									};
 									_productCategoryRepository.Insert(productCategory);
-									lastInserted = productCategory;
 								}
 							}
 						}
@@ -693,14 +682,8 @@ namespace SmartStore.Services.Catalog.Importer
 
 			// commit whole batch at once
 			var num = _productCategoryRepository.Context.SaveChanges();
-
-			// Perf: notify only about LAST insertion and update
-			if (lastInserted != null)
-				_services.EventPublisher.EntityInserted(lastInserted);
-
 			return num;
 		}
-
 
 		private int? ZeroToNull(object value, CultureInfo culture)
 		{

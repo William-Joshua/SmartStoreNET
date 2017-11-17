@@ -4,7 +4,7 @@ namespace SmartStore.Data.Migrations
     using System.Data.Entity.Migrations;
     using SmartStore.Data.Setup;
     
-    public partial class AddressEnhancement : DbMigration
+    public partial class AddressEnhancement : DbMigration, ILocaleResourcesProvider, IDataSeeder<SmartObjectContext>
     {
         public override void Up()
         {
@@ -18,6 +18,11 @@ namespace SmartStore.Data.Migrations
             DropColumn("dbo.Address", "Salutation");
         }
 
+        public bool RollbackOnFailure
+        {
+            get { return false; }
+        }
+        
         public void Seed(SmartObjectContext context)
 		{
 			context.MigrateLocaleResources(MigrateLocaleResources);
@@ -54,12 +59,20 @@ namespace SmartStore.Data.Migrations
                 "'Titel' aktiv",
                 "Set if 'Title' is enabled.",
                 "Legt fest, ob das Feld 'Titel' aktiv ist.");
-            
-            builder.AddOrUpdate("Admin.Configuration.Settings.Shipping.SuppressShippingOptsCheckoutStepIfOnlyOneActiveOpt",
+
+            builder.AddOrUpdate("Admin.Configuration.Settings.Shipping.SkipShippingIfSingleOption",
                 "Display shipping options during checkout process only if more then one option is available",
                 "Versandartauswahl nur anzeigen, wenn mehr als eine Versandart zur Verfügung steht",
                 "Display shipping options during the checkout process only if more then one shipping option is available.",
                 "Legt fest, ob die Versandartauswahl nur im Checkout-Prozess angezeigt wird, wenn mehr als eine Versandart zur Verfügung steht");
-        }
+            
+			builder.AddOrUpdate("Admin.DataExchange.Export.Projection.OnlyIndividuallyVisibleAssociated",
+				"Only individually visible products",
+				"Nur individuell sichtbare Produkte",
+				"Specifies whether to only export individually visible associated products.",
+				"Legt fest, ob nur individuell sichtbare, verknüpfte Produkte exportiert werden sollen.");
+            
+			builder.Delete("Providers.ExchangeRate.EcbExchange.SetCurrencyToEURO");
+		}
     }
 }

@@ -7,19 +7,18 @@ using SmartStore.Core.Logging;
 
 namespace SmartStore.Web.Framework.Filters
 {
-	[AttributeUsage(AttributeTargets.Class | AttributeTargets.Method, Inherited = true, AllowMultiple = false)]
-	public class NotifyAttribute : ActionFilterAttribute
+	public class NotifyAttribute : FilterAttribute, IResultFilter
 	{
 		public const string NotificationsKey = "sm.notifications.all";
 
 		public INotifier Notifier { get; set; }
 
-		public override void OnActionExecuted(ActionExecutedContext filterContext)
+		public virtual void OnResultExecuting(ResultExecutingContext filterContext)
 		{
-			if (Notifier == null || !Notifier.Entries.Any())
+			if (Notifier == null || Notifier.Entries.Count == 0)
 				return;
 
-			if (filterContext.HttpContext.Request.IsAjaxRequest())
+			if (!filterContext.IsChildAction && filterContext.HttpContext.Request.IsAjaxRequest())
 			{
 				HandleAjaxRequest(Notifier.Entries.FirstOrDefault(), filterContext.HttpContext.Response);
 				return;
@@ -27,6 +26,12 @@ namespace SmartStore.Web.Framework.Filters
 
 			Persist(filterContext.Controller.ViewData, Notifier.Entries.Where(x => x.Durable == false));
 			Persist(filterContext.Controller.TempData, Notifier.Entries.Where(x => x.Durable == true));
+
+			Notifier.Entries.Clear();
+		}
+
+		public virtual void OnResultExecuted(ResultExecutedContext filterContext)
+		{
 		}
 
 		private void Persist(IDictionary<string, object> bag, IEnumerable<NotifyEntry> source)
@@ -36,7 +41,8 @@ namespace SmartStore.Web.Framework.Filters
 
 			var existing = (bag[NotificationsKey] ?? new List<NotifyEntry>()) as List<NotifyEntry>;
 			
-			source.Each(x => {
+			source.Each(x => 
+			{
 				if (x.Message.Text.HasValue() && !existing.Contains(x))
 					existing.Add(x);
 			});
@@ -52,7 +58,6 @@ namespace SmartStore.Web.Framework.Filters
 			response.AddHeader("X-Message-Type", entry.Type.ToString().ToLower());
 			response.AddHeader("X-Message", entry.Message.Text);
 		}
-
 	}
 
 }

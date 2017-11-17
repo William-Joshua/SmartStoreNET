@@ -1,14 +1,17 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Web.Mvc;
 using SmartStore.Admin.Models.Directory;
 using SmartStore.Core.Domain.Directory;
 using SmartStore.Core.Domain.Stores;
+using SmartStore.Core.Plugins;
 using SmartStore.Services;
 using SmartStore.Services.Directory;
 using SmartStore.Services.Helpers;
 using SmartStore.Services.Localization;
+using SmartStore.Services.Payments;
 using SmartStore.Services.Security;
 using SmartStore.Services.Stores;
 using SmartStore.Web.Framework.Controllers;
@@ -32,28 +35,32 @@ namespace SmartStore.Admin.Controllers
 		private readonly IStoreMappingService _storeMappingService;
 		private readonly PluginMediator _pluginMediator;
 		private readonly ICommonServices _services;
+        private readonly IPaymentService _paymentService;
 
         #endregion
 
         #region Constructors
 
-        public CurrencyController(ICurrencyService currencyService, 
+        public CurrencyController(
+            ICurrencyService currencyService, 
             CurrencySettings currencySettings,
             IDateTimeHelper dateTimeHelper,
             ILocalizedEntityService localizedEntityService,
 			ILanguageService languageService,
             IStoreMappingService storeMappingService,
 			PluginMediator pluginMediator,
-			ICommonServices services)
+			ICommonServices services,
+            IPaymentService paymentService)
         {
-            this._currencyService = currencyService;
-            this._currencySettings = currencySettings;
-            this._dateTimeHelper = dateTimeHelper;
-            this._localizedEntityService = localizedEntityService;
-            this._languageService = languageService;
-			this._storeMappingService = storeMappingService;
-			this._pluginMediator = pluginMediator;
-			this._services = services;
+            _currencyService = currencyService;
+            _currencySettings = currencySettings;
+            _dateTimeHelper = dateTimeHelper;
+            _localizedEntityService = localizedEntityService;
+            _languageService = languageService;
+			_storeMappingService = storeMappingService;
+			_pluginMediator = pluginMediator;
+			_services = services;
+            _paymentService = paymentService;
         }
         
         #endregion
@@ -78,8 +85,22 @@ namespace SmartStore.Admin.Controllers
 				throw new ArgumentNullException("model");
 
 			var allStores = _services.StoreService.GetAllStores();
+            var paymentMethods = _paymentService.GetAllPaymentMethods();
+            var paymentProviders = _paymentService.LoadAllPaymentMethods().ToDictionarySafe(x => x.Metadata.SystemName);
 
-			model.AvailableStores = allStores.Select(s => s.ToModel()).ToList();
+            model.AvailableStores = allStores.Select(s => s.ToModel()).ToList();
+
+            foreach (var paymentMethod in paymentMethods.Where(x => x.RoundOrderTotalEnabled))
+            {
+                string friendlyName = null;
+                Provider<IPaymentMethod> provider;
+                if (paymentProviders.TryGetValue(paymentMethod.PaymentMethodSystemName, out provider))
+                {
+                    friendlyName = _pluginMediator.GetLocalizedFriendlyName(provider.Metadata);
+                }
+
+                model.RoundOrderTotalPaymentMethods[paymentMethod.PaymentMethodSystemName] = friendlyName ?? paymentMethod.PaymentMethodSystemName;
+            }
 
 			if (currency != null)
 			{
@@ -106,6 +127,17 @@ namespace SmartStore.Admin.Controllers
 			{
 				model.SelectedStoreIds = (currency == null ? new int[0] : _storeMappingService.GetStoresIdsWithAccess(currency));
 			}
+		}
+
+		private CurrencyModel CreateCurrencyListModel(Currency currency)
+		{
+			var store = _services.StoreContext.CurrentStore;
+			var model = currency.ToModel();
+
+			model.IsPrimaryStoreCurrency = store.PrimaryStoreCurrencyId == model.Id;
+			model.IsPrimaryExchangeRateCurrency = store.PrimaryExchangeRateCurrencyId == model.Id;
+
+			return model;
 		}
 
 		private bool IsAttachedToStore(Currency currency, IList<Store> stores, bool force)
@@ -150,44 +182,60 @@ namespace SmartStore.Admin.Controllers
             if (!_services.Permissions.Authorize(StandardPermissionProvider.ManageCurrencies))
                 return AccessDeniedView();
 
-			var store = _services.StoreContext.CurrentStore;
-            var models = _currencyService.GetAllCurrencies(true).Select(x => x.ToModel()).ToList();
+			var language = _services.WorkContext.WorkingLanguage;
+			var allCurrencies = _currencyService.GetAllCurrencies(true)
+				.ToDictionarySafe(x => x.CurrencyCode.EmptyNull().ToUpper(), x => x);
 
-			foreach (var model in models)
-			{
-				model.IsPrimaryStoreCurrency = (store.PrimaryStoreCurrencyId == model.Id);
-				model.IsPrimaryExchangeRateCurrency = (store.PrimaryExchangeRateCurrencyId == model.Id);
-			}
+			var models = allCurrencies.Select(x => CreateCurrencyListModel(x.Value)).ToList();
 
-			//var allStores = _services.StoreService.GetAllStores();
-			//foreach (var model in models)
-			//{
-			//	var storeNames = allStores.Where(x => x.PrimaryStoreCurrencyId == model.Id).Select(x => x.Name).ToList();
-
-			//	model.IsPrimaryStoreCurrency = string.Join("<br />", storeNames);
-
-			//	storeNames = allStores.Where(x => x.PrimaryExchangeRateCurrencyId == model.Id).Select(x => x.Name).ToList();
-
-			//	model.IsPrimaryExchangeRateCurrency = string.Join("<br />", storeNames);
-			//}
-
-            if (liveRates)
+			if (liveRates)
             {
                 try
                 {
 					var primaryExchangeCurrency = _services.StoreContext.CurrentStore.PrimaryExchangeRateCurrency;
                     if (primaryExchangeCurrency == null)
-                        throw new SmartException("Primary exchange rate currency is not set");
+                        throw new SmartException(T("Admin.System.Warnings.ExchangeCurrency.NotSet"));
 
-                    ViewBag.Rates = _currencyService.GetCurrencyLiveRates(primaryExchangeCurrency.CurrencyCode);
+					var rates = _currencyService.GetCurrencyLiveRates(primaryExchangeCurrency.CurrencyCode);
+
+					// get localized name of currencies
+					var currencyNames = allCurrencies.ToDictionarySafe(
+						x => x.Key,
+						x => x.Value.GetLocalized(y => y.Name, language.Id, true, false)
+					);
+
+					// fallback to english name where no localized currency name exists
+					foreach (var info in CultureInfo.GetCultures(CultureTypes.AllCultures).Where(x => !x.IsNeutralCulture))
+					{
+						try
+						{
+							var region = new RegionInfo(info.LCID);
+
+							if (!currencyNames.ContainsKey(region.ISOCurrencySymbol))
+								currencyNames.Add(region.ISOCurrencySymbol, region.CurrencyEnglishName);
+						}
+						catch { }
+					}
+
+					// provide rate with currency name and whether it is available in store
+					rates.Each(x =>
+					{
+						x.IsStoreCurrency = allCurrencies.ContainsKey(x.CurrencyCode);
+
+						if (x.Name.IsEmpty() && currencyNames.ContainsKey(x.CurrencyCode))
+							x.Name = currencyNames[x.CurrencyCode];
+					});
+
+					ViewBag.Rates = rates;
                 }
-                catch (Exception exc)
+                catch (Exception exception)
                 {
-                    NotifyError(exc, false);
+                    NotifyError(exception, false);
                 }
             }
 
-            ViewBag.ExchangeRateProviders = new List<SelectListItem>();
+			ViewBag.AutoUpdateEnabled = _currencySettings.AutoUpdateEnabled;
+			ViewBag.ExchangeRateProviders = new List<SelectListItem>();
 
             foreach (var erp in _currencyService.LoadAllExchangeRateProviders())
             {
@@ -199,14 +247,11 @@ namespace SmartStore.Admin.Controllers
                 });
             }
 
-            ViewBag.AutoUpdateEnabled = _currencySettings.AutoUpdateEnabled;
-
-            var gridModel = new GridModel<CurrencyModel>
-            {
-                Data = models,
-                Total = models.Count()
-            };
-            return View(gridModel);
+            return View(new GridModel<CurrencyModel>
+			{
+				Data = models,
+				Total = models.Count()
+			});
         }
 
         public ActionResult ApplyRate(string currencyCode, decimal rate)
@@ -214,14 +259,17 @@ namespace SmartStore.Admin.Controllers
             if (!_services.Permissions.Authorize(StandardPermissionProvider.ManageCurrencies))
                 return AccessDeniedView();
 
-            Currency currency = _currencyService.GetCurrencyByCode(currencyCode);
+            var currency = _currencyService.GetCurrencyByCode(currencyCode);
             if (currency != null)
             {
                 currency.Rate = rate;
-                currency.UpdatedOnUtc = DateTime.UtcNow;
+
                 _currencyService.UpdateCurrency(currency);
+
+				NotifySuccess(T("Admin.Common.TaskSuccessfullyProcessed"));
             }
-            return RedirectToAction("List","Currency", new { liveRates=true });
+
+            return RedirectToAction("List", "Currency", new { liveRates = true });
         }
 
         [HttpPost]
@@ -245,7 +293,7 @@ namespace SmartStore.Admin.Controllers
 			{
 				var currencies = _currencyService.GetAllCurrencies(true);
 
-				model.Data = currencies.Select(x => x.ToModel());
+				model.Data = currencies.Select(x => CreateCurrencyListModel(x));
 				model.Total = currencies.Count();
 			}
 			else
@@ -271,13 +319,13 @@ namespace SmartStore.Admin.Controllers
                 return AccessDeniedView();
 
             var model = new CurrencyModel();
-            //locales
             AddLocales(_languageService, model.Locales);
-			//Stores
 			PrepareCurrencyModel(model, null, false);
-            //default values
+
+            // Default values
             model.Published = true;
             model.Rate = 1;
+
             return View(model);
         }
 
@@ -290,24 +338,18 @@ namespace SmartStore.Admin.Controllers
             if (ModelState.IsValid)
             {
                 var currency = model.ToEntity();
-                currency.CreatedOnUtc = DateTime.UtcNow;
-                currency.UpdatedOnUtc = DateTime.UtcNow;
                 
 				_currencyService.InsertCurrency(currency);
                 
-				//locales
                 UpdateLocales(currency, model);
 				
-				//Stores
-				_storeMappingService.SaveStoreMappings<Currency>(currency, model.SelectedStoreIds);
+				_storeMappingService.SaveStoreMappings(currency, model.SelectedStoreIds);
 
                 NotifySuccess(_services.Localization.GetResource("Admin.Configuration.Currencies.Added"));
                 return continueEditing ? RedirectToAction("Edit", new { id = currency.Id }) : RedirectToAction("List");
             }
 
-            //If we got this far, something failed, redisplay form
-
-			//Stores
+            // If we got this far, something failed, redisplay form
 			PrepareCurrencyModel(model, null, true);
 
             return View(model);
@@ -325,7 +367,6 @@ namespace SmartStore.Admin.Controllers
             var model = currency.ToModel();
             model.CreatedOn = _dateTimeHelper.ConvertToUserTime(currency.CreatedOnUtc, DateTimeKind.Utc);
             
-			//locales
             AddLocales(_languageService, model.Locales, (locale, languageId) =>
             {
                 locale.Name = currency.GetLocalized(x => x.Name, languageId, false, false);
@@ -334,13 +375,16 @@ namespace SmartStore.Admin.Controllers
 			foreach (var ending in model.DomainEndings.SplitSafe(","))
 			{
 				var item = model.AvailableDomainEndings.FirstOrDefault(x => x.Value.IsCaseInsensitiveEqual(ending));
-				if (item == null)
-					model.AvailableDomainEndings.Add(new SelectListItem() { Text = ending, Value = ending, Selected = true });
-				else
-					item.Selected = true;
+                if (item == null)
+                {
+                    model.AvailableDomainEndings.Add(new SelectListItem { Text = ending, Value = ending, Selected = true });
+                }
+                else
+                {
+                    item.Selected = true;
+                }
 			}
 
-			//Stores
 			PrepareCurrencyModel(model, currency, false);
 
             return View(model);
@@ -362,14 +406,10 @@ namespace SmartStore.Admin.Controllers
 
 				if (!IsAttachedToStore(currency, _services.StoreService.GetAllStores(), false))
 				{
-					currency.UpdatedOnUtc = DateTime.UtcNow;
-    
 					_currencyService.UpdateCurrency(currency);
                 
-					//locales
 					UpdateLocales(currency, model);
 				
-					//Stores
 					_storeMappingService.SaveStoreMappings<Currency>(currency, model.SelectedStoreIds);
 
 					NotifySuccess(_services.Localization.GetResource("Admin.Configuration.Currencies.Updated"));
@@ -377,10 +417,9 @@ namespace SmartStore.Admin.Controllers
 				}
             }
 
-            //If we got this far, something failed, redisplay form
+            // If we got this far, something failed, redisplay form
             model.CreatedOn = _dateTimeHelper.ConvertToUserTime(currency.CreatedOnUtc, DateTimeKind.Utc);
 
-			//Stores
 			PrepareCurrencyModel(model, currency, true);
 
             return View(model);

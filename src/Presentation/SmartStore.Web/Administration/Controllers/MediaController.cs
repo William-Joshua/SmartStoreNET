@@ -1,24 +1,23 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.IO;
-using System.Text.RegularExpressions;
 using System.Web.Mvc;
+using System.Web.SessionState;
 using SmartStore.Core;
 using SmartStore.Services.Security;
 using SmartStore.Web.Framework.Controllers;
 
 namespace SmartStore.Admin.Controllers
 {
-
+	[SessionState(SessionStateBehavior.Disabled)]
 	public partial class MediaController : AdminControllerBase
     {
 		private readonly IPermissionService _permissionService;
         private readonly IWebHelper _webHelper;
 
-        public MediaController(IPermissionService permissionService, IWebHelper webHelper)
+		public MediaController(IPermissionService permissionService, IWebHelper webHelper)
         {
-            this._permissionService = permissionService;
-            this._webHelper = webHelper;
+			_permissionService = permissionService;
+            _webHelper = webHelper;
         }
 
         [HttpPost]

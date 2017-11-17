@@ -8,24 +8,16 @@ using SmartStore.Core.Data;
 using SmartStore.Core.Domain.Catalog;
 using SmartStore.Core.Domain.Stores;
 using SmartStore.Core.Events;
+using SmartStore.Data.Caching;
 
 namespace SmartStore.Services.Catalog
 {
-    /// <summary>
-    /// Manufacturer service
-    /// </summary>
-    public partial class ManufacturerService : IManufacturerService
+	public partial class ManufacturerService : IManufacturerService
     {
-        #region Constants
         private const string PRODUCTMANUFACTURERS_ALLBYMANUFACTURERID_KEY = "SmartStore.productmanufacturer.allbymanufacturerid-{0}-{1}-{2}-{3}-{4}";
         private const string PRODUCTMANUFACTURERS_ALLBYPRODUCTID_KEY = "SmartStore.productmanufacturer.allbyproductid-{0}-{1}-{2}";
-        private const string MANUFACTURERS_PATTERN_KEY = "SmartStore.manufacturer.";
-        private const string MANUFACTURERS_BY_ID_KEY = "SmartStore.manufacturer.id-{0}";
-        private const string PRODUCTMANUFACTURERS_PATTERN_KEY = "SmartStore.productmanufacturer.";
-
-        #endregion
-
-        #region Fields
+        private const string MANUFACTURERS_PATTERN_KEY = "SmartStore.manufacturer.*";
+        private const string PRODUCTMANUFACTURERS_PATTERN_KEY = "SmartStore.productmanufacturer.*";
 
         private readonly IRepository<Manufacturer> _manufacturerRepository;
         private readonly IRepository<ProductManufacturer> _productManufacturerRepository;
@@ -35,21 +27,7 @@ namespace SmartStore.Services.Catalog
 		private readonly IStoreContext _storeContext;
         private readonly IEventPublisher _eventPublisher;
         private readonly IRequestCache _requestCache;
-		#endregion
 
-		#region Ctor
-
-		/// <summary>
-		/// Ctor
-		/// </summary>
-		/// <param name="requestCache">Cache manager</param>
-		/// <param name="manufacturerRepository">Category repository</param>
-		/// <param name="productManufacturerRepository">ProductCategory repository</param>
-		/// <param name="productRepository">Product repository</param>
-		/// <param name="storeMappingRepository">Store mapping repository</param>
-		/// <param name="workContext">Work context</param>
-		/// <param name="storeContext">Store context</param>
-		/// <param name="eventPublisher">Event published</param>
 		public ManufacturerService(IRequestCache requestCache,
             IRepository<Manufacturer> manufacturerRepository,
             IRepository<ProductManufacturer> productManufacturerRepository,
@@ -73,14 +51,6 @@ namespace SmartStore.Services.Catalog
 
 		public DbQuerySettings QuerySettings { get; set; }
 
-        #endregion
-
-        #region Methods
-
-        /// <summary>
-        /// Deletes a manufacturer
-        /// </summary>
-        /// <param name="manufacturer">Manufacturer</param>
         public virtual void DeleteManufacturer(Manufacturer manufacturer)
         {
             if (manufacturer == null)
@@ -116,23 +86,11 @@ namespace SmartStore.Services.Catalog
 			return query;
 		}
 
-        /// <summary>
-        /// Gets all manufacturers
-        /// </summary>
-        /// <param name="showHidden">A value indicating whether to show hidden records</param>
-        /// <returns>Manufacturer collection</returns>
         public virtual IList<Manufacturer> GetAllManufacturers(bool showHidden = false)
         {
             return GetAllManufacturers(null, 0, showHidden);
         }
 
-        /// <summary>
-        /// Gets all manufacturers
-        /// </summary>
-        /// <param name="manufacturerName">Manufacturer name</param>
-		/// <param name="storeId">Whether to filter result by store identifier</param>
-        /// <param name="showHidden">A value indicating whether to show hidden records</param>
-        /// <returns>Manufacturer collection</returns>
         public virtual IList<Manufacturer> GetAllManufacturers(string manufacturerName, int storeId = 0, bool showHidden = false)
         {
 			var query = GetManufacturers(showHidden, storeId);
@@ -147,15 +105,6 @@ namespace SmartStore.Services.Catalog
             return manufacturers;
         }
 
-		/// <summary>
-		/// Gets all manufacturers
-		/// </summary>
-		/// <param name="manufacturerName">Manufacturer name</param>
-		/// <param name="pageIndex">Page index</param>
-		/// <param name="pageSize">Page size</param>
-		/// <param name="storeId">Whether to filter result by store identifier</param>
-		/// <param name="showHidden">A value indicating whether to show hidden records</param>
-		/// <returns>Manufacturers</returns>
 		public virtual IPagedList<Manufacturer> GetAllManufacturers(string manufacturerName,
             int pageIndex, int pageSize, int storeId = 0, bool showHidden = false)
         {
@@ -163,26 +112,14 @@ namespace SmartStore.Services.Catalog
             return new PagedList<Manufacturer>(manufacturers, pageIndex, pageSize);
         }
 
-        /// <summary>
-        /// Gets a manufacturer
-        /// </summary>
-        /// <param name="manufacturerId">Manufacturer identifier</param>
-        /// <returns>Manufacturer</returns>
         public virtual Manufacturer GetManufacturerById(int manufacturerId)
         {
             if (manufacturerId == 0)
                 return null;
 
-            string key = string.Format(MANUFACTURERS_BY_ID_KEY, manufacturerId);
-            return _requestCache.Get(key, () => { 
-                return _manufacturerRepository.GetById(manufacturerId); 
-            });
-        }
+			return _manufacturerRepository.GetByIdCached(manufacturerId, "db.manu.id-" + manufacturerId);
+		}
 
-        /// <summary>
-        /// Inserts a manufacturer
-        /// </summary>
-        /// <param name="manufacturer">Manufacturer</param>
         public virtual void InsertManufacturer(Manufacturer manufacturer)
         {
             if (manufacturer == null)
@@ -193,15 +130,8 @@ namespace SmartStore.Services.Catalog
             //cache
             _requestCache.RemoveByPattern(MANUFACTURERS_PATTERN_KEY);
             _requestCache.RemoveByPattern(PRODUCTMANUFACTURERS_PATTERN_KEY);
-
-            //event notification
-            _eventPublisher.EntityInserted(manufacturer);
         }
 
-        /// <summary>
-        /// Updates the manufacturer
-        /// </summary>
-        /// <param name="manufacturer">Manufacturer</param>
         public virtual void UpdateManufacturer(Manufacturer manufacturer)
         {
             if (manufacturer == null)
@@ -212,38 +142,27 @@ namespace SmartStore.Services.Catalog
             //cache
             _requestCache.RemoveByPattern(MANUFACTURERS_PATTERN_KEY);
             _requestCache.RemoveByPattern(PRODUCTMANUFACTURERS_PATTERN_KEY);
-
-            //event notification
-            _eventPublisher.EntityUpdated(manufacturer);
         }
 
-        /// <summary>
-        /// Deletes a product manufacturer mapping
-        /// </summary>
-        /// <param name="productManufacturer">Product manufacturer mapping</param>
-        public virtual void DeleteProductManufacturer(ProductManufacturer productManufacturer)
+		public virtual void UpdateHasDiscountsApplied(Manufacturer manufacturer)
+		{
+			Guard.NotNull(manufacturer, nameof(manufacturer));
+
+			manufacturer.HasDiscountsApplied = manufacturer.AppliedDiscounts.Count > 0;
+			UpdateManufacturer(manufacturer);
+		}
+
+		public virtual void DeleteProductManufacturer(ProductManufacturer productManufacturer)
         {
             if (productManufacturer == null)
                 throw new ArgumentNullException("productManufacturer");
 
             _productManufacturerRepository.Delete(productManufacturer);
 
-            //cache
             _requestCache.RemoveByPattern(MANUFACTURERS_PATTERN_KEY);
             _requestCache.RemoveByPattern(PRODUCTMANUFACTURERS_PATTERN_KEY);
-
-            //event notification
-            _eventPublisher.EntityDeleted(productManufacturer);
         }
 
-        /// <summary>
-        /// Gets product manufacturer collection
-        /// </summary>
-        /// <param name="manufacturerId">Manufacturer identifier</param>
-        /// <param name="pageIndex">Page index</param>
-        /// <param name="pageSize">Page size</param>
-        /// <param name="showHidden">A value indicating whether to show hidden records</param>
-        /// <returns>Product manufacturer collection</returns>
         public virtual IPagedList<ProductManufacturer> GetProductManufacturersByManufacturerId(int manufacturerId, int pageIndex, int pageSize, bool showHidden = false)
         {
             if (manufacturerId == 0)
@@ -289,12 +208,6 @@ namespace SmartStore.Services.Catalog
             });
         }
 
-        /// <summary>
-        /// Gets a product manufacturer mapping collection
-        /// </summary>
-        /// <param name="productId">Product identifier</param>
-        /// <param name="showHidden">A value indicating whether to show hidden records</param>
-        /// <returns>Product manufacturer mapping collection</returns>
         public virtual IList<ProductManufacturer> GetProductManufacturersByProductId(int productId, bool showHidden = false)
         {
             if (productId == 0)
@@ -316,7 +229,7 @@ namespace SmartStore.Services.Catalog
 					{
 						if (!QuerySettings.IgnoreMultiStore)
 						{
-							//Store mapping
+							// Store mapping
 							var currentStoreId = _storeContext.CurrentStore.Id;
 							query = from pm in query
 									join m in _manufacturerRepository.Table on pm.ManufacturerId equals m.Id
@@ -327,7 +240,7 @@ namespace SmartStore.Services.Catalog
 									select pm;
 						}
 
-						//only distinct manufacturers (group by ID)
+						// Only distinct manufacturers (group by ID)
 						query = from pm in query
 								group pm by pm.Id into mGroup
 								orderby mGroup.Key
@@ -343,7 +256,7 @@ namespace SmartStore.Services.Catalog
 
 		public virtual Multimap<int, ProductManufacturer> GetProductManufacturersByManufacturerIds(int[] manufacturerIds)
 		{
-			Guard.ArgumentNotNull(() => manufacturerIds);
+			Guard.NotNull(manufacturerIds, nameof(manufacturerIds));
 
 			var query = _productManufacturerRepository.TableUntracked
 				.Where(x => manufacturerIds.Contains(x.ManufacturerId))
@@ -358,12 +271,12 @@ namespace SmartStore.Services.Catalog
 
 		public virtual Multimap<int, ProductManufacturer> GetProductManufacturersByProductIds(int[] productIds)
 		{
-			Guard.ArgumentNotNull(() => productIds);
+			Guard.NotNull(productIds, nameof(productIds));
 
 			var query =
 				from pm in _productManufacturerRepository.TableUntracked.Expand(x => x.Manufacturer).Expand(x => x.Manufacturer.Picture)
-				join m in _manufacturerRepository.TableUntracked on pm.ManufacturerId equals m.Id
-				where productIds.Contains(pm.ProductId)
+				//join m in _manufacturerRepository.TableUntracked on pm.ManufacturerId equals m.Id // Eager loading does not work with this join
+				where !pm.Manufacturer.Deleted && productIds.Contains(pm.ProductId)
 				select pm;
 
 			var map = query
@@ -375,11 +288,6 @@ namespace SmartStore.Services.Catalog
 			return map;
 		}
         
-        /// <summary>
-        /// Gets a product manufacturer mapping 
-        /// </summary>
-        /// <param name="productManufacturerId">Product manufacturer mapping identifier</param>
-        /// <returns>Product manufacturer mapping</returns>
         public virtual ProductManufacturer GetProductManufacturerById(int productManufacturerId)
         {
             if (productManufacturerId == 0)
@@ -388,10 +296,6 @@ namespace SmartStore.Services.Catalog
             return _productManufacturerRepository.GetById(productManufacturerId);
         }
 
-        /// <summary>
-        /// Inserts a product manufacturer mapping
-        /// </summary>
-        /// <param name="productManufacturer">Product manufacturer mapping</param>
         public virtual void InsertProductManufacturer(ProductManufacturer productManufacturer)
         {
             if (productManufacturer == null)
@@ -399,18 +303,11 @@ namespace SmartStore.Services.Catalog
 
             _productManufacturerRepository.Insert(productManufacturer);
 
-            //cache
             _requestCache.RemoveByPattern(MANUFACTURERS_PATTERN_KEY);
             _requestCache.RemoveByPattern(PRODUCTMANUFACTURERS_PATTERN_KEY);
 
-            //event notification
-            _eventPublisher.EntityInserted(productManufacturer);
         }
 
-        /// <summary>
-        /// Updates the product manufacturer mapping
-        /// </summary>
-        /// <param name="productManufacturer">Product manufacturer mapping</param>
         public virtual void UpdateProductManufacturer(ProductManufacturer productManufacturer)
         {
             if (productManufacturer == null)
@@ -418,14 +315,8 @@ namespace SmartStore.Services.Catalog
 
             _productManufacturerRepository.Update(productManufacturer);
 
-            //cache
             _requestCache.RemoveByPattern(MANUFACTURERS_PATTERN_KEY);
             _requestCache.RemoveByPattern(PRODUCTMANUFACTURERS_PATTERN_KEY);
-
-            //event notification
-            _eventPublisher.EntityUpdated(productManufacturer);
         }
-
-        #endregion
     }
 }

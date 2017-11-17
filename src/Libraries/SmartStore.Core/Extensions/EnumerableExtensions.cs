@@ -8,6 +8,7 @@ using System.Web;
 using SmartStore.Collections;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
+using SmartStore.Core;
 
 namespace SmartStore
 {
@@ -186,9 +187,9 @@ namespace SmartStore
 			 Func<TSource, TElement> elementSelector,
 			 IEqualityComparer<TKey> comparer)
 		{
-			Guard.ArgumentNotNull(() => source);
-			Guard.ArgumentNotNull(() => keySelector);
-			Guard.ArgumentNotNull(() => elementSelector);
+			Guard.NotNull(source, nameof(source));
+			Guard.NotNull(keySelector, nameof(keySelector));
+			Guard.NotNull(elementSelector, nameof(elementSelector));
 
 			var dictionary = new Dictionary<TKey, TElement>(comparer);
 
@@ -200,18 +201,49 @@ namespace SmartStore
 			return dictionary;
 		}
 
-        #endregion
+		/// <summary>The distinct by.</summary>
+		/// <param name="source">The source.</param>
+		/// <param name="keySelector">The key selector.</param>
+		/// <typeparam name="TSource">Source type</typeparam>
+		/// <typeparam name="TKey">Key type</typeparam>
+		/// <returns>the unique list</returns>
+		public static IEnumerable<TSource> DistinctBy<TSource, TKey>(this IEnumerable<TSource> source, Func<TSource, TKey> keySelector)
+			where TKey : IEquatable<TKey>
+		{
+			return source.Distinct(GenericEqualityComparer<TSource>.CompareMember(keySelector));
+		}
 
-        #region Multimap
+		/// <summary>
+		/// Orders a collection of entities by a specific ID sequence
+		/// </summary>
+		/// <typeparam name="TEntity">Entity type</typeparam>
+		/// <param name="source">The entity collection to sort</param>
+		/// <param name="ids">The IDs to order by</param>
+		/// <returns>The sorted entity collection</returns>
+		public static IEnumerable<TEntity> OrderBySequence<TEntity>(this IEnumerable<TEntity> source, IEnumerable<int> ids) where TEntity : BaseEntity
+		{
+			Guard.NotNull(source, nameof(source));
+			Guard.NotNull(ids, nameof(ids));
 
-        public static Multimap<TKey, TValue> ToMultimap<TSource, TKey, TValue>(
+			var sorted = from id in ids
+						 join entity in source on id equals entity.Id
+						 select entity;
+
+			return sorted;
+		}
+
+		#endregion
+
+		#region Multimap
+
+		public static Multimap<TKey, TValue> ToMultimap<TSource, TKey, TValue>(
                                                 this IEnumerable<TSource> source,
                                                 Func<TSource, TKey> keySelector,
                                                 Func<TSource, TValue> valueSelector)
         {
-            Guard.ArgumentNotNull(() => source);
-            Guard.ArgumentNotNull(() => keySelector);
-            Guard.ArgumentNotNull(() => valueSelector);
+            Guard.NotNull(source, nameof(source));
+            Guard.NotNull(keySelector, nameof(keySelector));
+            Guard.NotNull(valueSelector, nameof(valueSelector));
 
             var map = new Multimap<TKey, TValue>();
 
@@ -229,7 +261,7 @@ namespace SmartStore
 
         public static void AddRange(this NameValueCollection initial, NameValueCollection other)
         {
-            Guard.ArgumentNotNull(initial, "initial");
+            Guard.NotNull(initial, "initial");
 
             if (other == null)
                 return;

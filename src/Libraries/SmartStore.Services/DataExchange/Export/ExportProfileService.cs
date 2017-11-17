@@ -54,7 +54,7 @@ namespace SmartStore.Services.DataExchange.Export
 			string profileSystemName = null,
 			int cloneFromProfileId = 0)
 		{
-			Guard.ArgumentNotEmpty(() => providerSystemName);
+			Guard.NotEmpty(providerSystemName, nameof(providerSystemName));
 
 			var profileCount = _exportProfileRepository.Table.Count(x => x.ProviderSystemName == providerSystemName);
 
@@ -116,6 +116,7 @@ namespace SmartStore.Services.DataExchange.Export
 						CriticalCharacters = "¼,½,¾",
 						PriceType = PriceDisplayType.PreSelectedPrice,
 						NoGroupedProducts = (features.HasFlag(ExportFeatures.CanOmitGroupedProducts) ? true : false),
+						OnlyIndividuallyVisibleAssociated = true,
 						DescriptionMerging = ExportDescriptionMerging.Description
 					};
 
@@ -148,7 +149,8 @@ namespace SmartStore.Services.DataExchange.Export
 				.ToValidPath()
 				.Truncate(_dataExchangeSettings.MaxFileNameLength);
 
-			profile.FolderName = "~/App_Data/ExportProfiles/" + FileSystemHelper.CreateNonExistingDirectoryName(CommonHelper.MapPath("~/App_Data/ExportProfiles"), folderName);
+			var path = DataSettings.Current.TenantPath + "/ExportProfiles";
+			profile.FolderName = path + "/" + FileSystemHelper.CreateNonExistingDirectoryName(CommonHelper.MapPath(path), folderName);
 
 			if (profileSystemName.IsEmpty() && isSystemProfile)
 				profile.SystemName = cleanedSystemName;
@@ -192,8 +194,6 @@ namespace SmartStore.Services.DataExchange.Export
 				}
 			}
 
-			_eventPublisher.EntityInserted(profile);
-
 			return profile;
 		}
 
@@ -203,7 +203,7 @@ namespace SmartStore.Services.DataExchange.Export
 			string profileSystemName = null,
 			int cloneFromProfileId = 0)
 		{
-			Guard.ArgumentNotNull(() => provider);
+			Guard.NotNull(provider, nameof(provider));
 
 			var profile = InsertExportProfile(
 				provider.Metadata.SystemName,
@@ -224,9 +224,12 @@ namespace SmartStore.Services.DataExchange.Export
 
 			profile.FolderName = FileSystemHelper.ValidateRootPath(profile.FolderName);
 
-			_exportProfileRepository.Update(profile);
+			if (profile.FolderName == "~/")
+			{
+				throw new SmartException("Invalid export folder name.");
+			}
 
-			_eventPublisher.EntityUpdated(profile);
+			_exportProfileRepository.Update(profile);
 		}
 
 		public virtual void DeleteExportProfile(ExportProfile profile, bool force = false)
@@ -244,8 +247,6 @@ namespace SmartStore.Services.DataExchange.Export
 
 			var scheduleTask = _scheduleTaskService.GetTaskById(scheduleTaskId);
 			_scheduleTaskService.DeleteTask(scheduleTask);
-
-			_eventPublisher.EntityDeleted(profile);
 
 			if (System.IO.Directory.Exists(folder))
 			{
@@ -347,9 +348,12 @@ namespace SmartStore.Services.DataExchange.Export
 			if (deployment == null)
 				throw new ArgumentNullException("deployment");
 
-			_exportDeploymentRepository.Update(deployment);
+			if (deployment.DeploymentType == ExportDeploymentType.FileSystem && deployment.FileSystemPath == "~/")
+			{
+				throw new SmartException("Invalid deployment path.");
+			}
 
-			_eventPublisher.EntityUpdated(deployment);
+			_exportDeploymentRepository.Update(deployment);
 		}
 
 		public virtual void DeleteExportDeployment(ExportDeployment deployment)
@@ -358,8 +362,6 @@ namespace SmartStore.Services.DataExchange.Export
 				throw new ArgumentNullException("deployment");
 
 			_exportDeploymentRepository.Delete(deployment);
-
-			_eventPublisher.EntityDeleted(deployment);
 		}
 	}
 }

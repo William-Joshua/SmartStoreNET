@@ -58,9 +58,6 @@ namespace SmartStore.Services.Common
                 throw new ArgumentNullException("address");
 
             _addressRepository.Delete(address);
-
-            //event notification
-            _eventPublisher.EntityDeleted(address);
         }
 
 		public virtual void DeleteAddress(int id)
@@ -118,7 +115,7 @@ namespace SmartStore.Services.Common
 
 		public virtual IList<Address> GetAddressByIds(int[] addressIds)
 		{
-			Guard.ArgumentNotNull(() => addressIds);
+			Guard.NotNull(addressIds, nameof(addressIds));
 
 			var query =
 				from x in _addressRepository.TableUntracked.Expand(x => x.Country).Expand(x => x.StateProvince)
@@ -146,9 +143,6 @@ namespace SmartStore.Services.Common
                 address.StateProvinceId = null;
 
             _addressRepository.Insert(address);
-
-            //event notification
-            _eventPublisher.EntityInserted(address);
         }
 
         /// <summary>
@@ -167,9 +161,6 @@ namespace SmartStore.Services.Common
                 address.StateProvinceId = null;
 
             _addressRepository.Update(address);
-
-            //event notification
-            _eventPublisher.EntityUpdated(address);
         }
 
         /// <summary>

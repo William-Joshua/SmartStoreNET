@@ -1,31 +1,23 @@
-﻿using SmartStore.Core;
+﻿using System;
+using System.Web.Mvc;
+using System.Web.Mvc.Filters;
 using SmartStore.Core.Events;
 using SmartStore.Core.Infrastructure;
-using SmartStore.Services.Stores;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-using System.Web.Mvc;
-using SmartStore.Core.Data;
 using SmartStore.Core.Logging;
+using SmartStore.Services.Stores;
 using SmartStore.Utilities;
 
 namespace SmartStore.Services.Tasks
 {
-    public class InitializeSchedulerFilter : IAuthorizationFilter
+	public class InitializeSchedulerFilter : IAuthenticationFilter
     {
         private readonly static object s_lock = new object();
 		private static int s_errCount;
         private static bool s_initializing = false;
         
-        public void OnAuthorization(AuthorizationContext filterContext)
+        public void OnAuthentication(AuthenticationContext filterContext)
         {
-			if (filterContext == null || filterContext.HttpContext == null)
-				return;
-
-			var request = filterContext.HttpContext.Request;
+			var request = filterContext?.HttpContext?.Request;
 			if (request == null)
 				return;
 
@@ -38,15 +30,23 @@ namespace SmartStore.Services.Tasks
                 {
                     s_initializing = true;
 
-					ILogger logger = EngineContext.Current.Resolve<ILogger>();
+					var eventPublisher = EngineContext.Current.Resolve<IEventPublisher>();
+					var logger = EngineContext.Current.Resolve<ILoggerFactory>().CreateLogger<InitializeSchedulerFilter>();
+
+					// The very first request must set app state to 'fully initialized'
+					if (!EngineContext.Current.IsFullyInitialized)
+					{
+						EngineContext.Current.IsFullyInitialized = true;
+						eventPublisher.Publish(new AppStartedEvent { HttpContext = filterContext.HttpContext });
+					}
+					
 					ITaskScheduler taskScheduler = EngineContext.Current.Resolve<ITaskScheduler>();
 
 					try
 					{
 						var taskService = EngineContext.Current.Resolve<IScheduleTaskService>();
 						var storeService = EngineContext.Current.Resolve<IStoreService>();
-						var eventPublisher = EngineContext.Current.Resolve<IEventPublisher>();
-
+						
 						var tasks = taskService.GetAllTasks(true);
 						taskService.CalculateFutureSchedules(tasks, true /* isAppStart */);
 
@@ -64,7 +64,7 @@ namespace SmartStore.Services.Tasks
 						taskScheduler.SweepIntervalMinutes = CommonHelper.GetAppSetting<int>("sm:TaskSchedulerSweepInterval", 1);
 						taskScheduler.Start();
 
-						logger.Information("Initialized TaskScheduler with base url '{0}'".FormatInvariant(taskScheduler.BaseUrl));
+						logger.Info("Initialized TaskScheduler with base url '{0}'".FormatInvariant(taskScheduler.BaseUrl));
 
 						eventPublisher.Publish(new AppInitScheduledTasksEvent { ScheduledTasks = tasks });
 					}
@@ -72,7 +72,7 @@ namespace SmartStore.Services.Tasks
 					{
 						s_errCount++;
 						s_initializing = false;
-						logger.Error("Error while initializing Task Scheduler", ex);
+						logger.Error(ex, "Error while initializing Task Scheduler");
 					}
 					finally
 					{
@@ -85,11 +85,15 @@ namespace SmartStore.Services.Tasks
 
 						if (tooManyFailures && logger != null)
 						{
-							logger.Warning("Stopped trying to initialize the Task Scheduler: too many failed attempts in succession (10+). Maybe uncommenting the setting 'sm:TaskSchedulerBaseUrl' in web.config solves the problem?");
+							logger.Warn("Stopped trying to initialize the Task Scheduler: too many failed attempts in succession (10+). Maybe uncommenting the setting 'sm:TaskSchedulerBaseUrl' in web.config solves the problem?");
 						}
 					}
                 }
             }
         }
-    }
+
+		public void OnAuthenticationChallenge(AuthenticationChallengeContext filterContext)
+		{
+		}
+	}
 }

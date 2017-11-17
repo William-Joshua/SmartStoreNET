@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using SmartStore.Collections;
 using SmartStore.Core;
 using SmartStore.Core.Caching;
@@ -9,317 +10,297 @@ using SmartStore.Core.Domain.Catalog;
 using SmartStore.Core.Domain.Security;
 using SmartStore.Core.Domain.Stores;
 using SmartStore.Core.Events;
+using SmartStore.Data.Caching;
 using SmartStore.Services.Customers;
 using SmartStore.Services.Localization;
+using SmartStore.Services.Search;
 using SmartStore.Services.Security;
 using SmartStore.Services.Stores;
 
 namespace SmartStore.Services.Catalog
 {
-    /// <summary>
-    /// Category service
-    /// </summary>
-    public partial class CategoryService : ICategoryService
-    {
-        #region Constants
+	public partial class CategoryService : ICategoryService
+	{
+		internal static TimeSpan CategoryTreeCacheDuration = TimeSpan.FromHours(6);
 
-        private const string CATEGORIES_BY_PARENT_CATEGORY_ID_KEY = "SmartStore.category.byparent-{0}-{1}-{2}-{3}";
-		private const string PRODUCTCATEGORIES_ALLBYCATEGORYID_KEY = "SmartStore.productcategory.allbycategoryid-{0}-{1}-{2}-{3}-{4}-{5}";
-		private const string PRODUCTCATEGORIES_ALLBYPRODUCTID_KEY = "SmartStore.productcategory.allbyproductid-{0}-{1}-{2}-{3}";
-        private const string CATEGORIES_PATTERN_KEY = "SmartStore.category.";
-        private const string PRODUCTCATEGORIES_PATTERN_KEY = "SmartStore.productcategory.";
-        private const string CATEGORIES_BY_ID_KEY = "SmartStore.category.id-{0}";
+		// {0} = IncludeHidden, {1} = CustomerRoleIds, {2} = StoreId
+		internal const string CATEGORY_TREE_KEY = "category:tree-{0}-{1}-{2}";
+		internal const string CATEGORY_TREE_PATTERN_KEY = "category:tree-*";
 
-        #endregion
+		private const string CATEGORIES_BY_PARENT_CATEGORY_ID_KEY = "category.byparent-{0}-{1}-{2}-{3}";
+		private const string PRODUCTCATEGORIES_ALLBYCATEGORYID_KEY = "productcategory.allbycategoryid-{0}-{1}-{2}-{3}-{4}-{5}";
+		private const string PRODUCTCATEGORIES_ALLBYPRODUCTID_KEY = "productcategory.allbyproductid-{0}-{1}-{2}-{3}";
+		private const string CATEGORIES_PATTERN_KEY = "category.*";
+		private const string PRODUCTCATEGORIES_PATTERN_KEY = "productcategory.*";
 
-        #region Fields
-
-        private readonly IRepository<Category> _categoryRepository;
-        private readonly IRepository<ProductCategory> _productCategoryRepository;
-        private readonly IRepository<Product> _productRepository;
-        private readonly IRepository<AclRecord> _aclRepository;
+		private readonly IRepository<Category> _categoryRepository;
+		private readonly IRepository<ProductCategory> _productCategoryRepository;
+		private readonly IRepository<Product> _productRepository;
+		private readonly IRepository<AclRecord> _aclRepository;
 		private readonly IRepository<StoreMapping> _storeMappingRepository;
-        private readonly IWorkContext _workContext;
+		private readonly IWorkContext _workContext;
 		private readonly IStoreContext _storeContext;
-        private readonly IEventPublisher _eventPublisher;
-        private readonly IRequestCache _requestCache;
+		private readonly IEventPublisher _eventPublisher;
+		private readonly IRequestCache _requestCache;
+		private readonly ICacheManager _cache;
 		private readonly IStoreMappingService _storeMappingService;
 		private readonly IAclService _aclService;
-        private readonly Lazy<IEnumerable<ICategoryNavigationFilter>> _navigationFilters;
-        private readonly ICustomerService _customerService;
-        private readonly IProductService _productService;
-        private readonly IStoreService _storeService;
+		private readonly ICustomerService _customerService;
+		private readonly IStoreService _storeService;
+		private readonly ICatalogSearchService _catalogSearchService;
 
-		#endregion
-
-		#region Ctor
-
-		/// <summary>
-		/// Ctor
-		/// </summary>
-		/// <param name="requestCache">Cache manager</param>
-		/// <param name="categoryRepository">Category repository</param>
-		/// <param name="productCategoryRepository">ProductCategory repository</param>
-		/// <param name="productRepository">Product repository</param>
-		/// <param name="aclRepository">ACL record repository</param>
-		/// <param name="storeMappingRepository">Store mapping repository</param>
-		/// <param name="workContext">Work context</param>
-		/// <param name="storeContext">Store context</param>
-		/// <param name="eventPublisher">Event publisher</param>
 		public CategoryService(IRequestCache requestCache,
-            IRepository<Category> categoryRepository,
-            IRepository<ProductCategory> productCategoryRepository,
-            IRepository<Product> productRepository,
-            IRepository<AclRecord> aclRepository,
+			ICacheManager cache,
+			IRepository<Category> categoryRepository,
+			IRepository<ProductCategory> productCategoryRepository,
+			IRepository<Product> productRepository,
+			IRepository<AclRecord> aclRepository,
 			IRepository<StoreMapping> storeMappingRepository,
-            IWorkContext workContext,
+			IWorkContext workContext,
 			IStoreContext storeContext,
-            IEventPublisher eventPublisher,
+			IEventPublisher eventPublisher,
 			IStoreMappingService storeMappingService,
 			IAclService aclService,
-            Lazy<IEnumerable<ICategoryNavigationFilter>> navigationFilters,
-            ICustomerService customerService,
-            IProductService productService,
-            IStoreService storeService)
-        {
-            this._requestCache = requestCache;
-            this._categoryRepository = categoryRepository;
-            this._productCategoryRepository = productCategoryRepository;
-            this._productRepository = productRepository;
-            this._aclRepository = aclRepository;
-			this._storeMappingRepository = storeMappingRepository;
-            this._workContext = workContext;
-			this._storeContext = storeContext;
-            this._eventPublisher = eventPublisher;
-			this._storeMappingService = storeMappingService;
-			this._aclService = aclService;
-            this._navigationFilters = navigationFilters;
-            this._customerService = customerService;
-            this._productService = productService;
-            this._storeService = storeService;
+			ICustomerService customerService,
+			IStoreService storeService,
+			ICatalogSearchService catalogSearchService)
+		{
+			_requestCache = requestCache;
+			_cache = cache;
+			_categoryRepository = categoryRepository;
+			_productCategoryRepository = productCategoryRepository;
+			_productRepository = productRepository;
+			_aclRepository = aclRepository;
+			_storeMappingRepository = storeMappingRepository;
+			_workContext = workContext;
+			_storeContext = storeContext;
+			_eventPublisher = eventPublisher;
+			_storeMappingService = storeMappingService;
+			_aclService = aclService;
+			_customerService = customerService;
+			_storeService = storeService;
+			_catalogSearchService = catalogSearchService;
 
-			this.QuerySettings = DbQuerySettings.Default;
-        }
+			QuerySettings = DbQuerySettings.Default;
+		}
 
 		public DbQuerySettings QuerySettings { get; set; }
-
-        #endregion
-
-		#region Utilities
 
 		private void DeleteAllCategories(IList<Category> categories, bool delete)
 		{
 			foreach (var category in categories)
-			{				
+			{
 				if (delete)
+				{
 					category.Deleted = true;
+				}
 				else
+				{
 					category.ParentCategoryId = 0;
+				}
 
 				UpdateCategory(category);
 
 				var childCategories = GetAllCategoriesByParentCategoryId(category.Id, true);
 				DeleteAllCategories(childCategories, delete);
-            }
+			}
 		}
 
-		#endregion
+		public virtual void InheritAclIntoChildren(
+			int categoryId,
+			bool touchProductsWithMultipleCategories = false,
+			bool touchExistingAcls = false,
+			bool categoriesOnly = false)
+		{
+			var category = GetCategoryById(categoryId);
+			var subcategories = GetAllCategoriesByParentCategoryId(categoryId, true);
+			var allCustomerRoles = _customerService.GetAllCustomerRoles(true);
+			var categoryCustomerRoles = _aclService.GetCustomerRoleIdsWithAccess(category);
 
-		#region Methods
+			var categoryIds = new HashSet<int>(subcategories.Select(x => x.Id));
+			categoryIds.Add(categoryId);
 
-        public virtual void InheritAclIntoChildren(int categoryId, 
-            bool touchProductsWithMultipleCategories = false,
-            bool touchExistingAcls = false,
-            bool categoriesOnly = false)
-        {
+			var searchQuery = new CatalogSearchQuery()
+				.WithCategoryIds(null, categoryIds.ToArray());
 
-            var category = GetCategoryById(categoryId);
-            var subcategories = GetAllCategoriesByParentCategoryId(categoryId, true);
-            var context = new ProductSearchContext { PageSize = int.MaxValue, ShowHidden = true };
-            context.CategoryIds.AddRange(subcategories.Select(x => x.Id));
-            context.CategoryIds.Add(categoryId);
-            var products = _productService.SearchProducts(context);
-            var allCustomerRoles = _customerService.GetAllCustomerRoles(true);
-            var categoryCustomerRoles = _aclService.GetCustomerRoleIdsWithAccess(category);
+			var query = _catalogSearchService.PrepareQuery(searchQuery);
+			var products = query.OrderBy(p => p.Id).ToList();
 
-            using (var scope = new DbContextScope(ctx: _aclRepository.Context, autoDetectChanges: false, proxyCreation: false, validateOnSave: false))
-            {
-                _aclRepository.AutoCommitEnabled = false;
+			using (var scope = new DbContextScope(ctx: _aclRepository.Context, autoDetectChanges: false, proxyCreation: false, validateOnSave: false))
+			{
+				_aclRepository.AutoCommitEnabled = false;
 
-                foreach (var subcategory in subcategories)
-                {
-                    if (subcategory.SubjectToAcl != category.SubjectToAcl)
-                    {
-                        subcategory.SubjectToAcl = category.SubjectToAcl;
-                        _categoryRepository.Update(subcategory);
-                    }
+				foreach (var subcategory in subcategories)
+				{
+					if (subcategory.SubjectToAcl != category.SubjectToAcl)
+					{
+						subcategory.SubjectToAcl = category.SubjectToAcl;
+						_categoryRepository.Update(subcategory);
+					}
 
-                    var existingAclRecords = _aclService.GetAclRecords(subcategory).ToDictionarySafe(x => x.CustomerRoleId);
+					var existingAclRecords = _aclService.GetAclRecords(subcategory).ToDictionarySafe(x => x.CustomerRoleId);
 
-                    foreach (var customerRole in allCustomerRoles)
-                    {
-                        if (categoryCustomerRoles.Contains(customerRole.Id))
-                        {
-                            if (!existingAclRecords.ContainsKey(customerRole.Id))
-                            {
-                                _aclRepository.Insert(new AclRecord { CustomerRole = customerRole, CustomerRoleId = customerRole.Id, EntityId = subcategory.Id, EntityName = "Category" });
-                            }
-                        }
-                        else
-                        {
-                            AclRecord aclRecordToDelete;
-                            if (existingAclRecords.TryGetValue(customerRole.Id, out aclRecordToDelete))
-                            {
-                                _aclRepository.Delete(aclRecordToDelete);
-                            }
-                        }
-                    }
-                }
-                
-                _aclRepository.Context.SaveChanges();
+					foreach (var customerRole in allCustomerRoles)
+					{
+						if (categoryCustomerRoles.Contains(customerRole.Id))
+						{
+							if (!existingAclRecords.ContainsKey(customerRole.Id))
+							{
+								_aclRepository.Insert(new AclRecord { CustomerRole = customerRole, CustomerRoleId = customerRole.Id, EntityId = subcategory.Id, EntityName = "Category" });
+							}
+						}
+						else
+						{
+							AclRecord aclRecordToDelete;
+							if (existingAclRecords.TryGetValue(customerRole.Id, out aclRecordToDelete))
+							{
+								_aclRepository.Delete(aclRecordToDelete);
+							}
+						}
+					}
+				}
 
-                foreach (var product in products)
-                {
-                    if (product.SubjectToAcl != category.SubjectToAcl)
-                    {
-                        product.SubjectToAcl = category.SubjectToAcl;
-                        _productRepository.Update(product);
-                    }
+				_aclRepository.Context.SaveChanges();
 
-                    var existingAclRecords = _aclService.GetAclRecords(product).ToDictionarySafe(x => x.CustomerRoleId);
+				foreach (var product in products)
+				{
+					if (product.SubjectToAcl != category.SubjectToAcl)
+					{
+						product.SubjectToAcl = category.SubjectToAcl;
+						_productRepository.Update(product);
+					}
 
-                    foreach (var customerRole in allCustomerRoles)
-                    {
-                        if (categoryCustomerRoles.Contains(customerRole.Id))
-                        {
-                            if (!existingAclRecords.ContainsKey(customerRole.Id))
-                            {
-                                _aclRepository.Insert(new AclRecord { CustomerRole = customerRole, CustomerRoleId = customerRole.Id, EntityId = product.Id, EntityName = "Product" });
-                            }
-                        }
-                        else
-                        {
-                            AclRecord aclRecordToDelete;
-                            if (existingAclRecords.TryGetValue(customerRole.Id, out aclRecordToDelete))
-                            {
-                                _aclRepository.Delete(aclRecordToDelete);
-                            }
-                        }
-                    }
-                }
+					var existingAclRecords = _aclService.GetAclRecords(product).ToDictionarySafe(x => x.CustomerRoleId);
 
-                _aclRepository.Context.SaveChanges();
-            }
-        }
+					foreach (var customerRole in allCustomerRoles)
+					{
+						if (categoryCustomerRoles.Contains(customerRole.Id))
+						{
+							if (!existingAclRecords.ContainsKey(customerRole.Id))
+							{
+								_aclRepository.Insert(new AclRecord { CustomerRole = customerRole, CustomerRoleId = customerRole.Id, EntityId = product.Id, EntityName = "Product" });
+							}
+						}
+						else
+						{
+							AclRecord aclRecordToDelete;
+							if (existingAclRecords.TryGetValue(customerRole.Id, out aclRecordToDelete))
+							{
+								_aclRepository.Delete(aclRecordToDelete);
+							}
+						}
+					}
+				}
 
-        public virtual void InheritStoresIntoChildren(int categoryId, 
-            bool touchProductsWithMultipleCategories = false,
-            bool touchExistingAcls = false,
-            bool categoriesOnly = false)
-        {
+				_aclRepository.Context.SaveChanges();
+			}
+		}
 
-            var category = GetCategoryById(categoryId);
-            var subcategories = GetAllCategoriesByParentCategoryId(categoryId, true);
-            var context = new ProductSearchContext { PageSize = int.MaxValue , ShowHidden = true };
-            context.CategoryIds.AddRange(subcategories.Select(x => x.Id));
-            context.CategoryIds.Add(categoryId);
-            var products = _productService.SearchProducts(context);
+		public virtual void InheritStoresIntoChildren(
+			int categoryId,
+			bool touchProductsWithMultipleCategories = false,
+			bool touchExistingAcls = false,
+			bool categoriesOnly = false)
+		{
+			var category = GetCategoryById(categoryId);
+			var subcategories = GetAllCategoriesByParentCategoryId(categoryId, true);
+			var allStores = _storeService.GetAllStores();
+			var categoryStoreMappings = _storeMappingService.GetStoresIdsWithAccess(category);
 
-            var allStores = _storeService.GetAllStores();
-            var categoryStoreMappings = _storeMappingService.GetStoresIdsWithAccess(category);
+			var categoryIds = new HashSet<int>(subcategories.Select(x => x.Id));
+			categoryIds.Add(categoryId);
 
-            using (var scope = new DbContextScope(ctx: _storeMappingRepository.Context, autoDetectChanges: false, proxyCreation: false, validateOnSave: false))
-            {
-                _storeMappingRepository.AutoCommitEnabled = false;
+			var searchQuery = new CatalogSearchQuery()
+				.WithCategoryIds(null, categoryIds.ToArray());
 
-                foreach (var subcategory in subcategories)
-                {
-                    if (subcategory.LimitedToStores != category.LimitedToStores)
-                    {
-                        subcategory.LimitedToStores = category.LimitedToStores;
-                        _categoryRepository.Update(subcategory);
-                    }
+			var query = _catalogSearchService.PrepareQuery(searchQuery);
+			var products = query.OrderBy(p => p.Id).ToList();
 
-                    var existingStoreMappingsRecords = _storeMappingService.GetStoreMappings(subcategory).ToDictionary(x => x.StoreId);
+			using (var scope = new DbContextScope(ctx: _storeMappingRepository.Context, autoDetectChanges: false, proxyCreation: false, validateOnSave: false))
+			{
+				_storeMappingRepository.AutoCommitEnabled = false;
 
-                    foreach (var store in allStores)
-                    {
-                        if (categoryStoreMappings.Contains(store.Id))
-                        {
-                            if (!existingStoreMappingsRecords.ContainsKey(store.Id))
-                            {
-                                _storeMappingRepository.Insert(new StoreMapping { StoreId = store.Id, EntityId = subcategory.Id, EntityName = "Category" });
-                            }
-                        }
-                        else
-                        {
-                            StoreMapping storeMappingToDelete;
-                            if (existingStoreMappingsRecords.TryGetValue(store.Id, out storeMappingToDelete))
-                            {
-                                _storeMappingRepository.Delete(storeMappingToDelete);
-                            }
-                        }
-                    }
-                }
+				foreach (var subcategory in subcategories)
+				{
+					if (subcategory.LimitedToStores != category.LimitedToStores)
+					{
+						subcategory.LimitedToStores = category.LimitedToStores;
+						_categoryRepository.Update(subcategory);
+					}
 
-                _storeMappingRepository.Context.SaveChanges();
+					var existingStoreMappingsRecords = _storeMappingService.GetStoreMappings(subcategory).ToDictionary(x => x.StoreId);
 
-                foreach (var product in products)
-                {
-                    if (product.LimitedToStores != category.LimitedToStores)
-                    {
-                        product.LimitedToStores = category.LimitedToStores;
-                        _productRepository.Update(product);
-                    }
+					foreach (var store in allStores)
+					{
+						if (categoryStoreMappings.Contains(store.Id))
+						{
+							if (!existingStoreMappingsRecords.ContainsKey(store.Id))
+							{
+								_storeMappingRepository.Insert(new StoreMapping { StoreId = store.Id, EntityId = subcategory.Id, EntityName = "Category" });
+							}
+						}
+						else
+						{
+							StoreMapping storeMappingToDelete;
+							if (existingStoreMappingsRecords.TryGetValue(store.Id, out storeMappingToDelete))
+							{
+								_storeMappingRepository.Delete(storeMappingToDelete);
+							}
+						}
+					}
+				}
 
-                    var existingStoreMappingsRecords = _storeMappingService.GetStoreMappings(product).ToDictionary(x => x.StoreId);
+				_storeMappingRepository.Context.SaveChanges();
 
-                    foreach (var store in allStores)
-                    {
-                        if (categoryStoreMappings.Contains(store.Id))
-                        {
-                            if (!existingStoreMappingsRecords.ContainsKey(store.Id))
-                            {
-                                _storeMappingRepository.Insert(new StoreMapping { StoreId = store.Id, EntityId = product.Id, EntityName = "Product" });
-                            }
-                        }
-                        else
-                        {
-                            StoreMapping storeMappingToDelete;
-                            if (existingStoreMappingsRecords.TryGetValue(store.Id, out storeMappingToDelete))
-                            {
-                                _storeMappingRepository.Delete(storeMappingToDelete);
-                            }
-                        }
-                    }
-                }
+				foreach (var product in products)
+				{
+					if (product.LimitedToStores != category.LimitedToStores)
+					{
+						product.LimitedToStores = category.LimitedToStores;
+						_productRepository.Update(product);
+					}
 
-                _storeMappingRepository.Context.SaveChanges();
-            }
-        }
+					var existingStoreMappingsRecords = _storeMappingService.GetStoreMappings(product).ToDictionary(x => x.StoreId);
 
-		/// <summary>
-        /// Delete category
-        /// </summary>
-        /// <param name="category">Category</param>
-		/// <param name="deleteChilds">Whether to delete child categories or to set them to no parent.</param>
+					foreach (var store in allStores)
+					{
+						if (categoryStoreMappings.Contains(store.Id))
+						{
+							if (!existingStoreMappingsRecords.ContainsKey(store.Id))
+							{
+								_storeMappingRepository.Insert(new StoreMapping { StoreId = store.Id, EntityId = product.Id, EntityName = "Product" });
+							}
+						}
+						else
+						{
+							StoreMapping storeMappingToDelete;
+							if (existingStoreMappingsRecords.TryGetValue(store.Id, out storeMappingToDelete))
+							{
+								_storeMappingRepository.Delete(storeMappingToDelete);
+							}
+						}
+					}
+				}
+
+				_storeMappingRepository.Context.SaveChanges();
+			}
+		}
+
 		public virtual void DeleteCategory(Category category, bool deleteChilds = false)
-        {
-            if (category == null)
-                throw new ArgumentNullException("category");
+		{
+			Guard.NotNull(category, nameof(category));
 
-            category.Deleted = true;
-            UpdateCategory(category);
+			category.Deleted = true;
+			UpdateCategory(category);
 
 			var childCategories = GetAllCategoriesByParentCategoryId(category.Id, true);
 			DeleteAllCategories(childCategories, deleteChilds);
-        }
+		}
 
-		public virtual IQueryable<Category> GetCategories(
+		public virtual IQueryable<Category> BuildCategoriesQuery(
 			string categoryName = "",
 			bool showHidden = false,
 			string alias = null,
-			bool applyNavigationFilters = true,
 			int storeId = 0)
 		{
 			var query = _categoryRepository.Table;
@@ -352,79 +333,68 @@ namespace SmartStore.Services.Catalog
 			}
 			else
 			{
-				query = ApplyHiddenCategoriesFilter(query, applyNavigationFilters, _storeContext.CurrentStore.Id);
+				query = ApplyHiddenCategoriesFilter(query, storeId);
 			}
 
 			query = query.Where(c => !c.Deleted);
 
 			return query;
 		}
-        
-        /// <summary>
-        /// Gets all categories
-        /// </summary>
-        /// <param name="categoryName">Category name</param>
-        /// <param name="pageIndex">Page index</param>
-        /// <param name="pageSize">Page size</param>
-        /// <param name="showHidden">A value indicating whether to show hidden records</param>
-		/// <param name="alias">Alias to be filtered</param>
-        /// <param name="applyNavigationFilters">Whether to apply <see cref="ICategoryNavigationFilter"/> instances to the actual categories query. Never applied when <paramref name="showHidden"/> is <c>true</c></param>
-		/// <param name="ignoreCategoriesWithoutExistingParent">A value indicating whether categories without parent category in provided category list (source) should be ignored</param>
-		/// <param name="storeId">Store identifier; 0 to load all records</param>
-        /// <returns>Categories</returns>
-        public virtual IPagedList<Category> GetAllCategories(string categoryName = "", int pageIndex = 0, int pageSize = int.MaxValue, bool showHidden = false, string alias = null,
-			bool applyNavigationFilters = true, bool ignoreCategoriesWithoutExistingParent = true, int storeId = 0)
-        {
-			var query = GetCategories(categoryName, showHidden, alias, applyNavigationFilters, storeId);
+
+		public virtual IPagedList<Category> GetAllCategories(
+			string categoryName = "",
+			int pageIndex = 0,
+			int pageSize = int.MaxValue,
+			bool showHidden = false,
+			string alias = null,
+			bool ignoreCategoriesWithoutExistingParent = true,
+			int storeId = 0)
+		{
+			var query = BuildCategoriesQuery(categoryName, showHidden, alias, storeId);
 
 			query = query
 				.OrderBy(x => x.ParentCategoryId)
 				.ThenBy(x => x.DisplayOrder)
 				.ThenBy(x => x.Name);
 
-            var unsortedCategories = query.ToList();
+			var unsortedCategories = query.ToList();
 
-            // sort categories
-            var sortedCategories = unsortedCategories.SortCategoriesForTree(ignoreCategoriesWithoutExistingParent: ignoreCategoriesWithoutExistingParent);
+			// Sort categories
+			var sortedCategories = unsortedCategories.SortCategoryNodesForTree(ignoreCategoriesWithoutExistingParent: ignoreCategoriesWithoutExistingParent);
 
-            // paging
-            return new PagedList<Category>(sortedCategories, pageIndex, pageSize);
-        }
+			// Paging
+			return new PagedList<Category>(sortedCategories, pageIndex, pageSize);
+		}
 
-        /// <summary>
-        /// Gets all categories filtered by parent category identifier
-        /// </summary>
-        /// <param name="parentCategoryId">Parent category identifier</param>
-        /// <param name="showHidden">A value indicating whether to show hidden records</param>
-        /// <returns>Category collection</returns>
-        public IList<Category> GetAllCategoriesByParentCategoryId(int parentCategoryId, bool showHidden = false)
-        {
+		public IList<Category> GetAllCategoriesByParentCategoryId(int parentCategoryId, bool showHidden = false)
+		{
 			int storeId = _storeContext.CurrentStore.Id;
 			string key = string.Format(CATEGORIES_BY_PARENT_CATEGORY_ID_KEY, parentCategoryId, showHidden, _workContext.CurrentCustomer.Id, storeId);
-            return _requestCache.Get(key, () =>
-            {
-                var query = _categoryRepository.Table;
-                if (!showHidden)
-                    query = query.Where(c => c.Published);
-                query = query.Where(c => c.ParentCategoryId == parentCategoryId);
-                query = query.Where(c => !c.Deleted);
-                query = query.OrderBy(c => c.DisplayOrder);
+			return _requestCache.Get(key, () =>
+			{
+				var query = _categoryRepository.Table;
 
-                if (!showHidden)
-                {
-					query = ApplyHiddenCategoriesFilter(query, false, storeId);
+				if (!showHidden)
+					query = query.Where(c => c.Published);
+
+				query = query.Where(c => c.ParentCategoryId == parentCategoryId);
+				query = query.Where(c => !c.Deleted);
+				query = query.OrderBy(c => c.DisplayOrder);
+
+				if (!showHidden)
+				{
+					query = ApplyHiddenCategoriesFilter(query, storeId);
 					query = query.OrderBy(c => c.DisplayOrder);
-                }
+				}
 
-                var categories = query.ToList();
-                return categories;
-            });
+				var categories = query.ToList();
+				return categories;
+			});
+		}
 
-        }
-
-        protected virtual IQueryable<Category> ApplyHiddenCategoriesFilter(IQueryable<Category> query, bool applyNavigationFilters, int storeId = 0)
-        {
-            // ACL (access control list)
+		protected virtual IQueryable<Category> ApplyHiddenCategoriesFilter(IQueryable<Category> query, int storeId = 0)
+		{
+			// ACL (access control list)
 			if (!QuerySettings.IgnoreAcl)
 			{
 				var allowedCustomerRolesIds = _workContext.CurrentCustomer.CustomerRoles.Where(x => x.Active).Select(x => x.Id).ToList();
@@ -448,201 +418,132 @@ namespace SmartStore.Services.Catalog
 						select c;
 			}
 
-            // only distinct categories (group by ID)
-            query = from c in query
-                    group c by c.Id into cGroup
-                    orderby cGroup.Key
-                    select cGroup.FirstOrDefault();
-
-            if (applyNavigationFilters)
-            {
-                var filters = _navigationFilters.Value;
-                if (filters.Any())
-                {
-                    filters.Each(x => {
-                        query = x.Apply(query);
-                    });
-                }
-            }
+			// Only distinct categories (group by ID)
+			query = from c in query
+					group c by c.Id into cGroup
+					orderby cGroup.Key
+					select cGroup.FirstOrDefault();
 
 			return query;
-        }
-        
-        /// <summary>
-        /// Gets all categories displayed on the home page
-        /// </summary>
-        /// <returns>Categories</returns>
-        public virtual IList<Category> GetAllCategoriesDisplayedOnHomePage()
-        {
-            var query = from c in _categoryRepository.Table
-                        orderby c.DisplayOrder
-                        where c.Published &&
-                        !c.Deleted && 
-                        c.ShowOnHomePage
-                        select c;
+		}
 
-            var categories = query.ToList();
-            return categories;
-        }
-                
-        /// <summary>
-        /// Gets a category
-        /// </summary>
-        /// <param name="categoryId">Category identifier</param>
-        /// <returns>Category</returns>
-        public virtual Category GetCategoryById(int categoryId)
-        {
-            if (categoryId == 0)
-                return null;
+		public virtual IList<Category> GetAllCategoriesDisplayedOnHomePage()
+		{
+			var query = from c in _categoryRepository.Table
+						orderby c.DisplayOrder
+						where c.Published &&
+						!c.Deleted &&
+						c.ShowOnHomePage
+						select c;
 
-            string key = string.Format(CATEGORIES_BY_ID_KEY, categoryId);
-            return _requestCache.Get(key, () =>
-            {
-                return  _categoryRepository.GetById(categoryId);
-            });
-        }
+			var categories = query.ToList();
+			return categories;
+		}
 
-        /// <summary>
-        /// Inserts category
-        /// </summary>
-        /// <param name="category">Category</param>
-        public virtual void InsertCategory(Category category)
-        {
-            if (category == null)
-                throw new ArgumentNullException("category");
+		public virtual Category GetCategoryById(int categoryId)
+		{
+			if (categoryId == 0)
+				return null;
 
-            _categoryRepository.Insert(category);
+			return _categoryRepository.GetByIdCached(categoryId, "db.category.id-" + categoryId);
+		}
 
-            //cache
-            _requestCache.RemoveByPattern(CATEGORIES_PATTERN_KEY);
-            _requestCache.RemoveByPattern(PRODUCTCATEGORIES_PATTERN_KEY);
+		public virtual void InsertCategory(Category category)
+		{
+			Guard.NotNull(category, nameof(category));
 
-            //event notification
-            _eventPublisher.EntityInserted(category);
-        }
+			_categoryRepository.Insert(category);
 
-        /// <summary>
-        /// Updates the category
-        /// </summary>
-        /// <param name="category">Category</param>
-        public virtual void UpdateCategory(Category category)
-        {
-            if (category == null)
-                throw new ArgumentNullException("category");
+			_requestCache.RemoveByPattern(CATEGORIES_PATTERN_KEY);
+			_requestCache.RemoveByPattern(PRODUCTCATEGORIES_PATTERN_KEY);
+		}
 
-            //validate category hierarchy
-            var parentCategory = GetCategoryById(category.ParentCategoryId);
-            while (parentCategory != null)
-            {
-                if (category.Id == parentCategory.Id)
-                {
-                    category.ParentCategoryId = 0;
-                    break;
-                }
-                parentCategory = GetCategoryById(parentCategory.ParentCategoryId);
-            }
+		public virtual void UpdateCategory(Category category)
+		{
+			Guard.NotNull(category, nameof(category));
 
-            _categoryRepository.Update(category);
+			//validate category hierarchy
+			var parentCategory = GetCategoryById(category.ParentCategoryId);
+			while (parentCategory != null)
+			{
+				if (category.Id == parentCategory.Id)
+				{
+					category.ParentCategoryId = 0;
+					break;
+				}
+				parentCategory = GetCategoryById(parentCategory.ParentCategoryId);
+			}
 
-            //cache
-            _requestCache.RemoveByPattern(CATEGORIES_PATTERN_KEY);
-            _requestCache.RemoveByPattern(PRODUCTCATEGORIES_PATTERN_KEY);
+			_categoryRepository.Update(category);
 
-            //event notification
-            _eventPublisher.EntityUpdated(category);
-        }
-        
-        /// <summary>
-        /// Update HasDiscountsApplied property (used for performance optimization)
-        /// </summary>
-        /// <param name="category">Category</param>
-        public virtual void UpdateHasDiscountsApplied(Category category)
-        {
-            if (category == null)
-                throw new ArgumentNullException("category");
+			_requestCache.RemoveByPattern(CATEGORIES_PATTERN_KEY);
+			_requestCache.RemoveByPattern(PRODUCTCATEGORIES_PATTERN_KEY);
+		}
 
-            category.HasDiscountsApplied = category.AppliedDiscounts.Count > 0;
-            UpdateCategory(category);
-        }
+		public virtual void UpdateHasDiscountsApplied(Category category)
+		{
+			Guard.NotNull(category, nameof(category));
 
-        /// <summary>
-        /// Deletes a product category mapping
-        /// </summary>
-        /// <param name="productCategory">Product category</param>
-        public virtual void DeleteProductCategory(ProductCategory productCategory)
-        {
-            if (productCategory == null)
-                throw new ArgumentNullException("productCategory");
+			category.HasDiscountsApplied = category.AppliedDiscounts.Count > 0;
+			UpdateCategory(category);
+		}
 
-            _productCategoryRepository.Delete(productCategory);
+		public virtual void DeleteProductCategory(ProductCategory productCategory)
+		{
+			Guard.NotNull(productCategory, nameof(productCategory));
 
-            //cache
-            _requestCache.RemoveByPattern(CATEGORIES_PATTERN_KEY);
-            _requestCache.RemoveByPattern(PRODUCTCATEGORIES_PATTERN_KEY);
+			_productCategoryRepository.Delete(productCategory);
 
-            //event notification
-            _eventPublisher.EntityDeleted(productCategory);
-        }
+			//cache
+			_requestCache.RemoveByPattern(CATEGORIES_PATTERN_KEY);
+			_requestCache.RemoveByPattern(PRODUCTCATEGORIES_PATTERN_KEY);
+		}
 
-        /// <summary>
-        /// Gets product category mapping collection
-        /// </summary>
-        /// <param name="categoryId">Category identifier</param>
-        /// <param name="pageIndex">Page index</param>
-        /// <param name="pageSize">Page size</param>
-        /// <param name="showHidden">A value indicating whether to show hidden records</param>
-        /// <returns>Product a category mapping collection</returns>
-        public virtual IPagedList<ProductCategory> GetProductCategoriesByCategoryId(int categoryId, int pageIndex, int pageSize, bool showHidden = false)
-        {
-            if (categoryId == 0)
-                return new PagedList<ProductCategory>(new List<ProductCategory>(), pageIndex, pageSize);
+		public virtual IPagedList<ProductCategory> GetProductCategoriesByCategoryId(int categoryId, int pageIndex, int pageSize, bool showHidden = false)
+		{
+			if (categoryId == 0)
+				return new PagedList<ProductCategory>(new List<ProductCategory>(), pageIndex, pageSize);
 
 			int storeId = _storeContext.CurrentStore.Id;
 			string key = string.Format(PRODUCTCATEGORIES_ALLBYCATEGORYID_KEY, showHidden, categoryId, pageIndex, pageSize, _workContext.CurrentCustomer.Id, storeId);
 
-            return _requestCache.Get(key, () =>
-            {
-                var query = from pc in _productCategoryRepository.Table
-                            join p in _productRepository.Table on pc.ProductId equals p.Id
-                            where pc.CategoryId == categoryId && !p.Deleted && (showHidden || p.Published)
-                            select pc;
+			return _requestCache.Get(key, () =>
+			{
+				var query = from pc in _productCategoryRepository.Table
+							join p in _productRepository.Table on pc.ProductId equals p.Id
+							where pc.CategoryId == categoryId && !p.Deleted && (showHidden || p.Published)
+							select pc;
 
-                if (!showHidden)
-                {
-                    query = ApplyHiddenProductCategoriesFilter(query, storeId);
-                }
+				if (!showHidden)
+				{
+					query = ApplyHiddenProductCategoriesFilter(query, storeId);
+				}
 
 				query = query
 					.OrderBy(pc => pc.DisplayOrder)
-					.ThenBy(pc => pc.Id);	// required for paging!
+					.ThenBy(pc => pc.Id);   // required for paging!
 
-                var productCategories = new PagedList<ProductCategory>(query, pageIndex, pageSize);
+				var productCategories = new PagedList<ProductCategory>(query, pageIndex, pageSize);
 
-                return productCategories;
-            });
-        }
+				return productCategories;
+			});
+		}
 
-        /// <summary>
-        /// Gets a product category mapping collection
-        /// </summary>
-        /// <param name="productId">Product identifier</param>
-        /// <param name="showHidden">A value indicating whether to show hidden records</param>
-        /// <returns>Product category mapping collection</returns>
-        public virtual IList<ProductCategory> GetProductCategoriesByProductId(int productId, bool showHidden = false)
-        {
-            if (productId == 0)
-                return new List<ProductCategory>();
+		public virtual IList<ProductCategory> GetProductCategoriesByProductId(int productId, bool showHidden = false)
+		{
+			if (productId == 0)
+				return new List<ProductCategory>();
 
 			string key = string.Format(PRODUCTCATEGORIES_ALLBYPRODUCTID_KEY, showHidden, productId, _workContext.CurrentCustomer.Id, _storeContext.CurrentStore.Id);
-            return _requestCache.Get(key, () =>
-            {
+			return _requestCache.Get(key, () =>
+			{
 				var query = from pc in _productCategoryRepository.Table.Expand(x => x.Category)
-                            join c in _categoryRepository.Table on pc.CategoryId equals c.Id
-                            where pc.ProductId == productId &&
-                                  !c.Deleted &&
-                                  (showHidden || c.Published)
-                            orderby pc.DisplayOrder
-                            select pc;
+							join c in _categoryRepository.Table on pc.CategoryId equals c.Id
+							where pc.ProductId == productId &&
+								  !c.Deleted &&
+								  (showHidden || c.Published)
+							orderby pc.DisplayOrder
+							select pc;
 
 				var allProductCategories = query.ToList();
 				var result = new List<ProductCategory>();
@@ -662,14 +563,14 @@ namespace SmartStore.Services.Catalog
 					result.AddRange(allProductCategories);
 				}
 				return result;
-            });
-        }
+			});
+		}
 
 		public virtual Multimap<int, ProductCategory> GetProductCategoriesByProductIds(int[] productIds, bool? hasDiscountsApplied = null, bool showHidden = false)
 		{
-			Guard.ArgumentNotNull(() => productIds);
+			Guard.NotNull(productIds, nameof(productIds));
 
-			var query = 
+			var query =
 				from pc in _productCategoryRepository.TableUntracked.Expand(x => x.Category).Expand(x => x.Category.Picture)
 				join c in _categoryRepository.Table on pc.CategoryId equals c.Id
 				where productIds.Contains(pc.ProductId) && !c.Deleted && (showHidden || c.Published)
@@ -689,13 +590,13 @@ namespace SmartStore.Services.Catalog
 			}
 
 			var map = list.ToMultimap(x => x.ProductId, x => x);
-				
+
 			return map;
 		}
 
 		public virtual Multimap<int, ProductCategory> GetProductCategoriesByCategoryIds(int[] categoryIds)
 		{
-			Guard.ArgumentNotNull(() => categoryIds);
+			Guard.NotNull(categoryIds, nameof(categoryIds));
 
 			var query = _productCategoryRepository.TableUntracked
 				.Where(x => categoryIds.Contains(x.CategoryId))
@@ -709,10 +610,10 @@ namespace SmartStore.Services.Catalog
 		}
 
 		protected virtual IQueryable<ProductCategory> ApplyHiddenProductCategoriesFilter(IQueryable<ProductCategory> query, int storeId = 0)
-        {
+		{
 			bool group = false;
 
-            //ACL (access control list)
+			// ACL (access control list)
 			if (!QuerySettings.IgnoreAcl)
 			{
 				group = true;
@@ -727,7 +628,7 @@ namespace SmartStore.Services.Catalog
 						select pc;
 			}
 
-            //Store mapping
+			// Store mapping
 			if (!QuerySettings.IgnoreMultiStore && storeId > 0)
 			{
 				group = true;
@@ -742,7 +643,7 @@ namespace SmartStore.Services.Catalog
 
 			if (group)
 			{
-				//only distinct categories (group by ID)
+				// Only distinct categories (group by ID)
 				query = from pc in query
 						group pc by pc.Id into pcGroup
 						orderby pcGroup.Key
@@ -750,104 +651,203 @@ namespace SmartStore.Services.Catalog
 			}
 
 			return query;
-        }
-
-        /// <summary>
-        /// Gets a product category mapping 
-        /// </summary>
-        /// <param name="productCategoryId">Product category mapping identifier</param>
-        /// <returns>Product category mapping</returns>
-        public virtual ProductCategory GetProductCategoryById(int productCategoryId)
-        {
-            if (productCategoryId == 0)
-                return null;
-
-            return _productCategoryRepository.GetById(productCategoryId);
-        }
-
-        /// <summary>
-        /// Inserts a product category mapping
-        /// </summary>
-        /// <param name="productCategory">>Product category mapping</param>
-        public virtual void InsertProductCategory(ProductCategory productCategory)
-        {
-            if (productCategory == null)
-                throw new ArgumentNullException("productCategory");
-            
-            _productCategoryRepository.Insert(productCategory);
-
-            //cache
-            _requestCache.RemoveByPattern(CATEGORIES_PATTERN_KEY);
-            _requestCache.RemoveByPattern(PRODUCTCATEGORIES_PATTERN_KEY);
-
-            //event notification
-            _eventPublisher.EntityInserted(productCategory);
-        }
-
-        /// <summary>
-        /// Updates the product category mapping 
-        /// </summary>
-        /// <param name="productCategory">>Product category mapping</param>
-        public virtual void UpdateProductCategory(ProductCategory productCategory)
-        {
-            if (productCategory == null)
-                throw new ArgumentNullException("productCategory");
-
-            _productCategoryRepository.Update(productCategory);
-
-            //cache
-            _requestCache.RemoveByPattern(CATEGORIES_PATTERN_KEY);
-            _requestCache.RemoveByPattern(PRODUCTCATEGORIES_PATTERN_KEY);
-
-            //event notification
-            _eventPublisher.EntityUpdated(productCategory);
-        }
-
-		public virtual string GetCategoryPath(Product product, int? languageId, Func<int, string> pathLookup, Action<int, string> addPathToCache, Func<int, Category> categoryLookup,
-			ProductCategory prodCategory = null)
-		{
-			if (product == null)
-				return string.Empty;
-
-			pathLookup = pathLookup ?? ((i) => { return string.Empty; });
-			categoryLookup = categoryLookup ?? ((i) => { return GetCategoryById(i); });
-			addPathToCache = addPathToCache ?? ((i, val) => { });
-
-			var alreadyProcessedCategoryIds = new List<int>();
-			var path = new List<string>();
-
-			var productCategory = prodCategory ?? GetProductCategoriesByProductId(product.Id).FirstOrDefault();
-
-			if (productCategory != null && productCategory.Category != null)
-			{
-				string cached = pathLookup(productCategory.CategoryId);
-				if (cached.HasValue()) 
-				{
-					return cached;
-				}
-
-				var category = productCategory.Category;
-
-				path.Add(languageId.HasValue ? category.GetLocalized(x => x.Name, languageId.Value) : category.Name);
-				alreadyProcessedCategoryIds.Add(category.Id);
-
-				category = categoryLookup(category.ParentCategoryId);
-				while (category != null && !category.Deleted && category.Published && !alreadyProcessedCategoryIds.Contains(category.Id))
-				{
-					path.Add(languageId.HasValue ? category.GetLocalized(x => x.Name, languageId.Value) : category.Name);
-					alreadyProcessedCategoryIds.Add(category.Id);
-					category = categoryLookup(category.ParentCategoryId);
-				}
-
-				path.Reverse();
-				string result = String.Join(" > ", path);
-				addPathToCache(productCategory.CategoryId, result);
-				return result;
-			}
-
-			return string.Empty;
 		}
 
-        #endregion
-    }
+		public virtual ProductCategory GetProductCategoryById(int productCategoryId)
+		{
+			if (productCategoryId == 0)
+				return null;
+
+			return _productCategoryRepository.GetById(productCategoryId);
+		}
+
+		public virtual void InsertProductCategory(ProductCategory productCategory)
+		{
+			if (productCategory == null)
+				throw new ArgumentNullException("productCategory");
+
+			_productCategoryRepository.Insert(productCategory);
+
+			_requestCache.RemoveByPattern(CATEGORIES_PATTERN_KEY);
+			_requestCache.RemoveByPattern(PRODUCTCATEGORIES_PATTERN_KEY);
+		}
+
+		public virtual void UpdateProductCategory(ProductCategory productCategory)
+		{
+			if (productCategory == null)
+				throw new ArgumentNullException("productCategory");
+
+			_productCategoryRepository.Update(productCategory);
+
+			_requestCache.RemoveByPattern(CATEGORIES_PATTERN_KEY);
+			_requestCache.RemoveByPattern(PRODUCTCATEGORIES_PATTERN_KEY);
+		}
+
+		public virtual IEnumerable<ICategoryNode> GetCategoryTrail(ICategoryNode node)
+		{
+			Guard.NotNull(node, nameof(node));
+
+			var treeNode = GetCategoryTree(node.Id, true);
+
+			if (treeNode == null)
+			{
+				return Enumerable.Empty<ICategoryNode>();
+			}
+
+			return treeNode.Trail
+				.Where(x => !x.IsRoot)
+				//.TakeWhile(x => x.Value.Published) // TBD: (mc) do we need this?
+				.Select(x => x.Value);
+		}
+
+		public virtual string GetCategoryPath(
+			TreeNode<ICategoryNode> treeNode, 
+			int? languageId = null,
+			bool withAlias = false, 
+			string separator = " » ")
+		{
+			Guard.NotNull(treeNode, nameof(treeNode));
+
+			var lookupKey = "Path.{0}.{1}.{2}".FormatInvariant(separator, languageId ?? 0, withAlias);
+			var cachedPath = treeNode.GetMetadata<string>(lookupKey, false);
+
+			if (cachedPath != null)
+			{
+				return cachedPath;
+			}
+
+			var trail = treeNode.Trail;
+			var sb = new StringBuilder(string.Empty, (trail.Count()) * 16);
+
+			foreach (var node in trail)
+			{
+				//if (!node.Value.Published)
+				//{
+				//	// If any parent is unpublished,
+				//	// this category is not visible: so, no path.
+				//	sb.Clear();
+				//	break;
+				//}
+
+				if (!node.IsRoot)
+				{
+					var cat = node.Value;
+
+					var name = languageId.HasValue
+						? cat.GetLocalized(n => n.Name, languageId.Value)
+						: cat.Name;
+
+					sb.Append(name);
+
+					if (withAlias && cat.Alias.HasValue())
+					{
+						sb.Append(" (");
+						sb.Append(cat.Alias);
+						sb.Append(")");
+					}
+
+					if (node != treeNode)
+					{
+						// Is not self (trail end)
+						sb.Append(separator);
+					}
+				}
+			}
+
+			var path = sb.ToString();
+			treeNode.SetThreadMetadata(lookupKey, path);
+			return path;
+		}
+
+		public TreeNode<ICategoryNode> GetCategoryTree(int rootCategoryId = 0, bool includeHidden = false, int storeId = 0)
+		{
+			var storeToken = QuerySettings.IgnoreMultiStore ? "0" : storeId.ToString();
+			var rolesToken = QuerySettings.IgnoreAcl || includeHidden ? "0" : _workContext.CurrentCustomer.GetRolesIdent();
+			var cacheKey = CATEGORY_TREE_KEY.FormatInvariant(includeHidden.ToString().ToLower(), rolesToken, storeToken);
+
+			var root = _cache.Get(cacheKey, () =>
+			{
+				// (Perf) don't fetch every field from db
+				var query = from x in BuildCategoriesQuery(showHidden: includeHidden, storeId: storeId)
+							orderby x.ParentCategoryId, x.DisplayOrder, x.Name
+							select new
+							{
+								x.Id,
+								x.ParentCategoryId,
+								x.Name,
+								x.Alias,
+								x.PictureId,
+								x.Published,
+								x.DisplayOrder,
+								x.UpdatedOnUtc,
+								x.BadgeText,
+								x.BadgeStyle,
+								x.LimitedToStores,
+								x.SubjectToAcl
+							};
+
+				var unsortedNodes = query.ToList().Select(x => new CategoryNode
+				{
+					Id = x.Id,
+					ParentCategoryId = x.ParentCategoryId,
+					Name = x.Name,
+					Alias = x.Alias,
+					PictureId = x.PictureId,
+					Published = x.Published,
+					DisplayOrder = x.DisplayOrder,
+					UpdatedOnUtc = x.UpdatedOnUtc,
+					BadgeText = x.BadgeText,
+					BadgeStyle = x.BadgeStyle,
+					LimitedToStores = x.LimitedToStores,
+					SubjectToAcl = x.SubjectToAcl
+				});
+
+				var nodes = unsortedNodes.SortCategoryNodesForTree(0, true);
+				var curParent = new TreeNode<ICategoryNode>(new CategoryNode { Name = "Home" });
+				CategoryNode prevNode = null;
+
+				foreach (var node in nodes)
+				{
+					// Determine parent
+					if (prevNode != null)
+					{
+						if (node.ParentCategoryId != curParent.Value.Id)
+						{
+							if (node.ParentCategoryId == prevNode.Id)
+							{
+								// level +1
+								curParent = curParent.LastChild;
+							}
+							else
+							{
+								// level -x
+								while (!curParent.IsRoot)
+								{
+									if (curParent.Value.Id == node.ParentCategoryId)
+									{
+										break;
+									}
+									curParent = curParent.Parent;
+								}
+							}
+						}
+					}
+
+					// add to parent
+					curParent.Append(node, node.Id);
+
+					prevNode = node;
+				}
+
+				return curParent.Root;
+			}, CategoryTreeCacheDuration);
+
+			if (rootCategoryId > 0)
+			{
+				root = root.SelectNodeById(rootCategoryId);
+			}
+
+			return root;
+		}
+	}
 }

@@ -58,13 +58,13 @@ namespace SmartStore.Services.Payments
             var result = decimal.Zero;
             if (usePercentage)
             {
-                //percentage
-                var orderTotalWithoutPaymentFee = orderTotalCalculationService.GetShoppingCartTotal(cart, usePaymentMethodAdditionalFee: false);
+                // Percentage
+                decimal? orderTotalWithoutPaymentFee = orderTotalCalculationService.GetShoppingCartTotal(cart, usePaymentMethodAdditionalFee: false);
                 result = (decimal)((((float)orderTotalWithoutPaymentFee) * ((float)fee)) / 100f);
             }
             else
             {
-                //fixed value
+                // Fixed value
                 result = fee;
             }
             return result;
@@ -72,7 +72,7 @@ namespace SmartStore.Services.Payments
 
 		public static RouteInfo GetConfigurationRoute(this IPaymentMethod method)
 		{
-			Guard.ArgumentNotNull(() => method);
+			Guard.NotNull(method, nameof(method));
 			
 			string action;
 			string controller;
@@ -94,7 +94,7 @@ namespace SmartStore.Services.Payments
 
 		public static RouteInfo GetPaymentInfoRoute(this IPaymentMethod method)
 		{
-			Guard.ArgumentNotNull(() => method);
+			Guard.NotNull(method, nameof(method));
 
 			string action;
 			string controller;

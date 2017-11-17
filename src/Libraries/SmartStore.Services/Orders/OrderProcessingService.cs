@@ -9,7 +9,6 @@ using SmartStore.Core.Domain.Customers;
 using SmartStore.Core.Domain.Directory;
 using SmartStore.Core.Domain.Discounts;
 using SmartStore.Core.Domain.Localization;
-using SmartStore.Core.Domain.Logging;
 using SmartStore.Core.Domain.Orders;
 using SmartStore.Core.Domain.Payments;
 using SmartStore.Core.Domain.Shipping;
@@ -33,10 +32,7 @@ using SmartStore.Services.Tax;
 
 namespace SmartStore.Services.Orders
 {
-	/// <summary>
-	/// Order processing service
-	/// </summary>
-	public partial class OrderProcessingService : IOrderProcessingService
+    public partial class OrderProcessingService : IOrderProcessingService
     {
         #region Fields
         
@@ -205,11 +201,6 @@ namespace SmartStore.Services.Orders
 
 		#region Utilities
 
-		private decimal Round(decimal value)
-		{
-			return (_shoppingCartSettings.RoundPricesDuringCalculation ? Math.Round(value, 2) : value);
-		}
-
 		private void ProcessErrors(Order order, IList<string> errors, string messageKey)
 		{
 			if (errors.Any())
@@ -217,7 +208,7 @@ namespace SmartStore.Services.Orders
 				var msg = string.Concat(T(messageKey, order.GetOrderNumber()), " ", string.Join(" ", errors));
 
 				_orderService.AddOrderNote(order, msg);
-				_logger.InsertLog(LogLevel.Error, msg, msg);
+				_logger.Error(msg);
 			}
 		}
 
@@ -242,12 +233,8 @@ namespace SmartStore.Services.Orders
 			if (order.RewardPointsWereAdded)
 				return;
 
-			// Truncate increases the risk of inaccuracy of rounding
-            //int points = (int)Math.Truncate((amount ?? order.OrderTotal) / _rewardPointsSettings.PointsForPurchases_Amount * _rewardPointsSettings.PointsForPurchases_Points);
-
-			// why are points awarded for OrderTotal? wouldn't be OrderSubtotalInclTax better?
-
-			int points = (int)Math.Round((amount ?? order.OrderTotal) / _rewardPointsSettings.PointsForPurchases_Amount * _rewardPointsSettings.PointsForPurchases_Points);
+			// Truncate same as Floor for positive amounts
+			var points = (int)Math.Truncate((amount ?? order.OrderTotal) / _rewardPointsSettings.PointsForPurchases_Amount * _rewardPointsSettings.PointsForPurchases_Points);
             if (points == 0)
                 return;
 
@@ -555,8 +542,12 @@ namespace SmartStore.Services.Orders
                 if (!processPaymentRequest.IsRecurringPayment)
                 {
                     //load shopping cart
-                    if (processPaymentRequest.ShoppingCartItems.Count > 0)
-                        cart = processPaymentRequest.ShoppingCartItems;
+                    if (processPaymentRequest.ShoppingCartItemIds.Count > 0)
+                    {
+                        cart = customer.GetCartItems(ShoppingCartType.ShoppingCart, processPaymentRequest.StoreId)
+                            .Where(x => processPaymentRequest.ShoppingCartItemIds.Contains(x.Item.Id))
+                            .ToList();
+                    }
                     else
                         cart = customer.GetCartItems(ShoppingCartType.ShoppingCart, processPaymentRequest.StoreId);
 
@@ -758,38 +749,34 @@ namespace SmartStore.Services.Orders
                 else
                 {
                     orderTaxTotal = initialOrder.OrderTax;
-                    //VAT number
+                    // VAT number
                     vatNumber = initialOrder.VatNumber;
                 }
 				processPaymentRequest.OrderTax = orderTaxTotal;
 
-                //order total (and applied discounts, gift cards, reward points)
-                decimal? orderTotal = null;
-                decimal orderDiscountAmount = decimal.Zero;
-                List<AppliedGiftCard> appliedGiftCards = null;
-                int redeemedRewardPoints = 0;
-                decimal redeemedRewardPointsAmount = decimal.Zero;
+                // Order total (and applied discounts, gift cards, reward points)
+                ShoppingCartTotal cartTotal = null;
+
                 if (!processPaymentRequest.IsRecurringPayment)
                 {
-                    Discount orderAppliedDiscount = null;
-                    orderTotal = _orderTotalCalculationService.GetShoppingCartTotal(cart,
-                        out orderDiscountAmount, out orderAppliedDiscount, out appliedGiftCards, out redeemedRewardPoints, out redeemedRewardPointsAmount);
+                    cartTotal = _orderTotalCalculationService.GetShoppingCartTotal(cart);
 
-                    if (!orderTotal.HasValue)
+                    if (!cartTotal.TotalAmount.HasValue)
                         throw new SmartException(T("Order.CannotCalculateOrderTotal"));
 
-					//discount history
-					if (orderAppliedDiscount != null && !appliedDiscounts.Any(x => x.Id == orderAppliedDiscount.Id))
+					// Discount history
+					if (cartTotal.AppliedDiscount != null && !appliedDiscounts.Any(x => x.Id == cartTotal.AppliedDiscount.Id))
 					{
-						appliedDiscounts.Add(orderAppliedDiscount);
+						appliedDiscounts.Add(cartTotal.AppliedDiscount);
 					}
                 }
                 else
                 {
-                    orderDiscountAmount = initialOrder.OrderDiscount;
-                    orderTotal = initialOrder.OrderTotal;
+                    cartTotal = new ShoppingCartTotal(initialOrder.OrderTotal);
+                    cartTotal.DiscountAmount = initialOrder.OrderDiscount;
                 }
-                processPaymentRequest.OrderTotal = orderTotal.Value;
+
+                processPaymentRequest.OrderTotal = cartTotal.TotalAmount.Value;
 
                 #endregion
 
@@ -858,7 +845,7 @@ namespace SmartStore.Services.Orders
 
 				// skip payment workflow if order total equals zero
                 var skipPaymentWorkflow = false;
-				if (orderTotal.Value == decimal.Zero)
+				if (cartTotal.TotalAmount.Value == decimal.Zero)
 				{
 					skipPaymentWorkflow = true;
 				}
@@ -1019,9 +1006,10 @@ namespace SmartStore.Services.Orders
 							PaymentMethodAdditionalFeeTaxRate = paymentAdditionalFeeTaxRate,
                             TaxRates = taxRates,
                             OrderTax = orderTaxTotal,
-                            OrderTotal = orderTotal.Value,
+                            OrderTotalRounding = cartTotal.RoundingAmount,
+                            OrderTotal = cartTotal.TotalAmount.Value,
                             RefundedAmount = decimal.Zero,
-                            OrderDiscount = orderDiscountAmount,
+                            OrderDiscount = cartTotal.DiscountAmount,
                             CheckoutAttributeDescription = checkoutAttributeDescription,
                             CheckoutAttributesXml = checkoutAttributesXml,
                             CustomerCurrencyCode = customerCurrencyCode,
@@ -1060,8 +1048,6 @@ namespace SmartStore.Services.Orders
                             ShippingMethod = shippingMethodName,
                             ShippingRateComputationMethodSystemName = shippingRateComputationMethodSystemName,
                             VatNumber = vatNumber,
-							CreatedOnUtc = utcNow,
-							UpdatedOnUtc = utcNow,
                             CustomerOrderComment = extraData.ContainsKey("CustomerComment") ? extraData["CustomerComment"] : ""
                         };
 
@@ -1076,12 +1062,12 @@ namespace SmartStore.Services.Orders
 
                         if (!processPaymentRequest.IsRecurringPayment)
                         {
-                            //move shopping cart items to order products
+                            // Move shopping cart items to order products
                             foreach (var sc in cart)
                             {
 								sc.Item.Product.MergeWithCombination(sc.Item.AttributesXml);
 
-                                //prices
+                                // Prices
                                 decimal taxRate = decimal.Zero;
 								decimal unitPriceTaxRate = decimal.Zero;
                                 decimal scUnitPrice = _priceCalculationService.GetUnitPrice(sc, true);
@@ -1091,7 +1077,7 @@ namespace SmartStore.Services.Orders
                                 decimal scSubTotalInclTax = _taxService.GetProductPrice(sc.Item.Product, scSubTotal, true, customer, out taxRate);
                                 decimal scSubTotalExclTax = _taxService.GetProductPrice(sc.Item.Product, scSubTotal, false, customer, out taxRate);
 
-                                //discounts
+                                // Discounts
                                 Discount scDiscount = null;
                                 decimal discountAmount = _priceCalculationService.GetDiscountAmount(sc, out scDiscount);
                                 decimal discountAmountInclTax = _taxService.GetProductPrice(sc.Item.Product, discountAmount, true, customer, out taxRate);
@@ -1102,12 +1088,12 @@ namespace SmartStore.Services.Orders
 									appliedDiscounts.Add(scDiscount);
 								}
 
-                                //attributes
+                                // Attributes
                                 var attributeDescription = _productAttributeFormatter.FormatAttributes(sc.Item.Product, sc.Item.AttributesXml, customer);
 
                                 var itemWeight = _shippingService.GetShoppingCartItemWeight(sc);
 
-                                //save order item
+                                // Dave order item
                                 var orderItem = new OrderItem
                                 {
                                     OrderItemGuid = Guid.NewGuid(),
@@ -1150,7 +1136,7 @@ namespace SmartStore.Services.Orders
                                 order.OrderItems.Add(orderItem);
                                 _orderService.UpdateOrder(order);
 
-                                //gift cards
+                                // Gift cards
                                 if (sc.Item.Product.IsGiftCard)
                                 {
                                     string giftCardRecipientName, giftCardRecipientEmail, giftCardSenderName, giftCardSenderEmail, giftCardMessage;
@@ -1182,17 +1168,19 @@ namespace SmartStore.Services.Orders
 								_productService.AdjustInventory(sc, true);
                             }
 
-                            //clear shopping cart
-                            if (!processPaymentRequest.IsMultiOrder)
-                                cart.ToList().ForEach(sci => _shoppingCartService.DeleteShoppingCartItem(sci.Item, false));
+							// Clear shopping cart
+							if (!processPaymentRequest.IsMultiOrder)
+							{
+								cart.ToList().ForEach(sci => _shoppingCartService.DeleteShoppingCartItem(sci.Item, false));
+							}
                         }
                         else
                         {
-                            //recurring payment
+                            // Recurring payment
                             var initialOrderItems = initialOrder.OrderItems;
                             foreach (var orderItem in initialOrderItems)
                             {
-                                //save item
+                                // Save item
                                 var newOrderItem = new OrderItem
                                 {
                                     OrderItemGuid = Guid.NewGuid(),
@@ -1218,7 +1206,7 @@ namespace SmartStore.Services.Orders
                                 order.OrderItems.Add(newOrderItem);
                                 _orderService.UpdateOrder(order);
 
-                                //gift cards
+                                // Gift cards
                                 if (orderItem.Product.IsGiftCard)
                                 {
                                     string giftCardRecipientName, giftCardRecipientEmail, giftCardSenderName, giftCardSenderEmail, giftCardMessage;
@@ -1251,7 +1239,7 @@ namespace SmartStore.Services.Orders
                             }
                         }
 
-                        //discount usage history
+                        // Discount usage history
 						if (!processPaymentRequest.IsRecurringPayment)
 						{
 							foreach (var discount in appliedDiscounts)
@@ -1266,10 +1254,10 @@ namespace SmartStore.Services.Orders
 							}
 						}
 
-                        //gift card usage history
-						if (!processPaymentRequest.IsRecurringPayment && appliedGiftCards != null)
+                        // Gift card usage history
+						if (!processPaymentRequest.IsRecurringPayment && cartTotal.AppliedGiftCards != null)
 						{
-							foreach (var agc in appliedGiftCards)
+							foreach (var agc in cartTotal.AppliedGiftCards)
 							{
 								var amountUsed = agc.AmountCanBeUsed;
 								var gcuh = new GiftCardUsageHistory
@@ -1284,21 +1272,21 @@ namespace SmartStore.Services.Orders
 							}
 						}
 
-                        //reward points history
-                        if (redeemedRewardPointsAmount > decimal.Zero)
+                        // Reward points history
+                        if (cartTotal.RedeemedRewardPointsAmount > decimal.Zero)
                         {
-                            customer.AddRewardPointsHistoryEntry(-redeemedRewardPoints,
+                            customer.AddRewardPointsHistoryEntry(-cartTotal.RedeemedRewardPoints,
 								_localizationService.GetResource("RewardPoints.Message.RedeemedForOrder", order.CustomerLanguageId).FormatInvariant(order.GetOrderNumber()),
                                 order,
-								redeemedRewardPointsAmount);
+                                cartTotal.RedeemedRewardPointsAmount);
 
                             _customerService.UpdateCustomer(customer);
                         }
 
-                        //recurring orders
+                        // Recurring orders
                         if (!processPaymentRequest.IsRecurringPayment && isRecurringShoppingCart)
                         {
-                            //create recurring payment (the first payment)
+                            // Create recurring payment (the first payment)
                             var rp = new RecurringPayment
                             {
                                 CycleLength = processPaymentRequest.RecurringCycleLength,
@@ -1368,7 +1356,7 @@ namespace SmartStore.Services.Orders
 						//reset checkout data
                         if (!processPaymentRequest.IsRecurringPayment && !processPaymentRequest.IsMultiOrder)
 						{
-							_customerService.ResetCheckoutData(customer, processPaymentRequest.StoreId, clearCouponCodes: true, clearCheckoutAttributes: true);
+							_customerService.ResetCheckoutData(customer, processPaymentRequest.StoreId, clearCouponCodes: true, clearCheckoutAttributes: true, clearRewardPoints: true);
 						}
 
 						// check for generic attributes to be inserted automatically
@@ -1426,10 +1414,10 @@ namespace SmartStore.Services.Orders
 					}
                 }
             }
-            catch (Exception exc)
+            catch (Exception ex)
             {
-                _logger.Error(exc.Message, exc);
-                result.AddError(exc.Message);
+                _logger.Error(ex);
+                result.AddError(ex.Message);
             }
 
 			if (result.Errors.Count > 0)
@@ -1651,7 +1639,7 @@ namespace SmartStore.Services.Orders
             _shipmentService.UpdateShipment(shipment);
 
             //check whether we have more items to ship
-            if (order.HasItemsToAddToShipment() || order.HasItemsToShip())
+            if (order.CanAddItemsToShipment() || order.HasItemsToDispatch())
                 order.ShippingStatusId = (int)ShippingStatus.PartiallyShipped;
             else
                 order.ShippingStatusId = (int)ShippingStatus.Shipped;
@@ -1694,7 +1682,7 @@ namespace SmartStore.Services.Orders
             shipment.DeliveryDateUtc = DateTime.UtcNow;
             _shipmentService.UpdateShipment(shipment);
 
-			if (!order.HasItemsToAddToShipment() && !order.HasItemsToShip() && !order.HasItemsToDeliver())
+			if (!order.CanAddItemsToShipment() && !order.HasItemsToDispatch() && !order.HasItemsToDeliver())
 			{
 				order.ShippingStatusId = (int)ShippingStatus.Delivered;
 			}
@@ -1780,21 +1768,23 @@ namespace SmartStore.Services.Orders
 
 			if (context.UpdateTotals && oi.Order.OrderStatusId <= (int)OrderStatus.Pending)
 			{
-				decimal priceInclTax = Round(context.QuantityNew * oi.UnitPriceInclTax);
-				decimal priceExclTax = Round(context.QuantityNew * oi.UnitPriceExclTax);
+				var currency = _currencyService.GetCurrencyByCode(oi.Order.CustomerCurrencyCode);
+
+				decimal priceInclTax = (context.QuantityNew * oi.UnitPriceInclTax).RoundIfEnabledFor(currency);
+				decimal priceExclTax = (context.QuantityNew * oi.UnitPriceExclTax).RoundIfEnabledFor(currency);
 
 				decimal deltaPriceInclTax = priceInclTax - (context.IsNewOrderItem ? decimal.Zero : oi.PriceInclTax);
 				decimal deltaPriceExclTax = priceExclTax - (context.IsNewOrderItem ? decimal.Zero : oi.PriceExclTax);
 
 				oi.Quantity = context.QuantityNew;
-				oi.PriceInclTax = Round(priceInclTax);
-				oi.PriceExclTax = Round(priceExclTax);
+				oi.PriceInclTax = priceInclTax.RoundIfEnabledFor(currency);
+				oi.PriceExclTax = priceExclTax.RoundIfEnabledFor(currency);
 
 				decimal subtotalInclTax = oi.Order.OrderSubtotalInclTax + deltaPriceInclTax;
 				decimal subtotalExclTax = oi.Order.OrderSubtotalExclTax + deltaPriceExclTax;
 
-				oi.Order.OrderSubtotalInclTax = Round(subtotalInclTax);
-				oi.Order.OrderSubtotalExclTax = Round(subtotalExclTax);
+				oi.Order.OrderSubtotalInclTax = subtotalInclTax.RoundIfEnabledFor(currency);
+				oi.Order.OrderSubtotalExclTax = subtotalExclTax.RoundIfEnabledFor(currency);
 
 				decimal discountInclTax = oi.DiscountAmountInclTax * context.QuantityChangeFactor;
 				decimal discountExclTax = oi.DiscountAmountExclTax * context.QuantityChangeFactor;
@@ -1802,14 +1792,14 @@ namespace SmartStore.Services.Orders
 				decimal deltaDiscountInclTax = discountInclTax - oi.DiscountAmountInclTax;
 				decimal deltaDiscountExclTax = discountExclTax - oi.DiscountAmountExclTax;
 
-				oi.DiscountAmountInclTax = Round(discountInclTax);
-				oi.DiscountAmountExclTax = Round(discountExclTax);
+				oi.DiscountAmountInclTax = discountInclTax.RoundIfEnabledFor(currency);
+				oi.DiscountAmountExclTax = discountExclTax.RoundIfEnabledFor(currency);
 
 				decimal total = Math.Max(oi.Order.OrderTotal + deltaPriceInclTax, 0);
 				decimal tax = Math.Max(oi.Order.OrderTax + (deltaPriceInclTax - deltaPriceExclTax), 0);
 
-				oi.Order.OrderTotal = Round(total);
-				oi.Order.OrderTax = Round(tax);
+				oi.Order.OrderTotal = total.RoundIfEnabledFor(currency);
+				oi.Order.OrderTax = tax.RoundIfEnabledFor(currency);
 
 				_orderService.UpdateOrder(oi.Order);
 			}
@@ -2506,6 +2496,7 @@ namespace SmartStore.Services.Orders
                 var daysPassed = (DateTime.UtcNow - order.CreatedOnUtc).TotalDays;
                 numberOfDaysReturnRequestAvailableValid = (daysPassed - _orderSettings.NumberOfDaysReturnRequestAvailable) < 0;
             }
+
             return numberOfDaysReturnRequestAvailableValid;
         }
 
@@ -2561,7 +2552,7 @@ namespace SmartStore.Services.Orders
 
 		public virtual Shipment AddShipment(Order order, string trackingNumber, Dictionary<int, int> quantities)
 		{
-			Guard.ArgumentNotNull(() => order);
+			Guard.NotNull(order, nameof(order));
 
 			Shipment shipment = null;
 			decimal? totalWeight = null;
@@ -2572,7 +2563,7 @@ namespace SmartStore.Services.Orders
 					continue;
 
 				//ensure that this product can be shipped (have at least one item to ship)
-				var maxQtyToAdd = orderItem.GetTotalNumberOfItemsCanBeAddedToShipment();
+				var maxQtyToAdd = orderItem.GetItemsCanBeAddedToShipmentCount();
 				if (maxQtyToAdd <= 0)
 					continue;
 

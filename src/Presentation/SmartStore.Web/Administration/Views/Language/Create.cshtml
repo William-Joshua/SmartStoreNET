@@ -1,12 +1,12 @@
 ﻿@model LanguageModel
 @{
-    //page title
     ViewBag.Title = T("Admin.Configuration.Languages.AddNew").Text;
 }
 @using (Html.BeginForm())
 {
     <div class="section-header">
         <div class="title">
+            <i class="fa fa-language"></i>
             @T("Admin.Configuration.Languages.AddNew") @Html.ActionLink("(" + T("Admin.Configuration.Languages.BackToList") + ")", "List")
         </div>
         <div class="options">
@@ -14,5 +14,6 @@
             <button type="submit" name="save" value="save-continue" class="btn">@T("Admin.Common.SaveContinue")</button>
         </div>
     </div>
-    @Html.Partial("_CreateOrUpdate", Model)
+
+    Html.RenderPartial("_CreateOrUpdate", Model);
 }

@@ -87,60 +87,13 @@ namespace SmartStore.FacebookAuth.Controllers
         [ChildActionOnly]
         public ActionResult PublicInfo()
         {
-            return View();
+            var settings = _services.Settings.LoadSetting<FacebookExternalAuthSettings>(_services.StoreContext.CurrentStore.Id);
+
+            if (settings.ClientKeyIdentifier.HasValue() && settings.ClientSecret.HasValue())
+                return View();
+            else
+                return new EmptyResult();
         }
-
-		[NonAction]
-		private ActionResult LoginInternal(string returnUrl, bool verifyResponse)
-        {
-			var processor = _openAuthenticationService.LoadExternalAuthenticationMethodBySystemName(Provider.SystemName, _services.StoreContext.CurrentStore.Id);
-			if (processor == null || !processor.IsMethodActive(_externalAuthenticationSettings))
-			{
-				throw new SmartException("Facebook module cannot be loaded");
-			}
-
-            var viewModel = new LoginModel();
-            TryUpdateModel(viewModel);
-
-			var result = _oAuthProviderFacebookAuthorizer.Authorize(returnUrl, verifyResponse);
-            switch (result.AuthenticationStatus)
-            {
-                case OpenAuthenticationStatus.Error:
-                    {
-                        if (!result.Success)
-                            foreach (var error in result.Errors)
-								NotifyError(error);
-
-                        return new RedirectResult(Url.LogOn(returnUrl));
-                    }
-                case OpenAuthenticationStatus.AssociateOnLogon:
-                    {
-                        return new RedirectResult(Url.LogOn(returnUrl));
-                    }
-                case OpenAuthenticationStatus.AutoRegisteredEmailValidation:
-                    {
-                        //result
-                        return RedirectToRoute("RegisterResult", new { resultId = (int)UserRegistrationType.EmailValidation });
-                    }
-                case OpenAuthenticationStatus.AutoRegisteredAdminApproval:
-                    {
-                        return RedirectToRoute("RegisterResult", new { resultId = (int)UserRegistrationType.AdminApproval });
-                    }
-                case OpenAuthenticationStatus.AutoRegisteredStandard:
-                    {
-                        return RedirectToRoute("RegisterResult", new { resultId = (int)UserRegistrationType.Standard });
-                    }
-                default:
-                    break;
-            }
-
-            if (result.Result != null)
-				return result.Result;
-
-			return HttpContext.Request.IsAuthenticated ?
-				RedirectToReferrer(returnUrl, "~/") :
-				new RedirectResult(Url.LogOn(returnUrl));
-		}
 
 		public ActionResult Login(string returnUrl)
 		{
@@ -150,6 +103,58 @@ namespace SmartStore.FacebookAuth.Controllers
 		public ActionResult LoginCallback(string returnUrl)
 		{
 			return LoginInternal(returnUrl, true);
+		}
+
+		[NonAction]
+		private ActionResult LoginInternal(string returnUrl, bool verifyResponse)
+		{
+			var processor = _openAuthenticationService.LoadExternalAuthenticationMethodBySystemName(Provider.SystemName, _services.StoreContext.CurrentStore.Id);
+			if (processor == null || !processor.IsMethodActive(_externalAuthenticationSettings))
+			{
+				throw new SmartException("Facebook module cannot be loaded");
+			}
+
+			var viewModel = new LoginModel();
+			TryUpdateModel(viewModel);
+
+			var result = _oAuthProviderFacebookAuthorizer.Authorize(returnUrl, verifyResponse);
+			switch (result.AuthenticationStatus)
+			{
+				case OpenAuthenticationStatus.Error:
+					{
+						if (!result.Success)
+							foreach (var error in result.Errors)
+								NotifyError(error);
+
+						return new RedirectResult(Url.LogOn(returnUrl));
+					}
+				case OpenAuthenticationStatus.AssociateOnLogon:
+					{
+						return new RedirectResult(Url.LogOn(returnUrl));
+					}
+				case OpenAuthenticationStatus.AutoRegisteredEmailValidation:
+					{
+						//result
+						return RedirectToRoute("RegisterResult", new { resultId = (int)UserRegistrationType.EmailValidation });
+					}
+				case OpenAuthenticationStatus.AutoRegisteredAdminApproval:
+					{
+						return RedirectToRoute("RegisterResult", new { resultId = (int)UserRegistrationType.AdminApproval });
+					}
+				case OpenAuthenticationStatus.AutoRegisteredStandard:
+					{
+						return RedirectToRoute("RegisterResult", new { resultId = (int)UserRegistrationType.Standard });
+					}
+				default:
+					break;
+			}
+
+			if (result.Result != null)
+				return result.Result;
+
+			return HttpContext.Request.IsAuthenticated ?
+				RedirectToReferrer(returnUrl, "~/") :
+				new RedirectResult(Url.LogOn(returnUrl));
 		}
 	}
 }

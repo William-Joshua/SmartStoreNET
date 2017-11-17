@@ -1,6 +1,7 @@
 ﻿using System;
 using SmartStore.Web.Controllers;
 using NUnit.Framework;
+using SmartStore.Services.Catalog.Modelling;
 
 namespace SmartStore.Web.MVC.Tests.Public.Infrastructure
 {
@@ -60,9 +61,9 @@ namespace SmartStore.Web.MVC.Tests.Public.Infrastructure
         public void Catalog_routes()
         {
             //"~/p/some-se-name/".ShouldMapTo<CatalogController>(c => c.Product("some-se-name"));
-            "~/recentlyviewedproducts/".ShouldMapTo<CatalogController>(c => c.RecentlyViewedProducts());
-            "~/newproducts/".ShouldMapTo<CatalogController>(c => c.RecentlyAddedProducts());
-            "~/newproducts/rss/".ShouldMapTo<CatalogController>(c => c.RecentlyAddedProductsRss());
+            "~/recentlyviewedproducts/".ShouldMapTo<CatalogController>(c => c.RecentlyViewedProducts(null));
+            "~/newproducts/".ShouldMapTo<CatalogController>(c => c.RecentlyAddedProducts(null));
+            "~/newproducts/rss/".ShouldMapTo<CatalogController>(c => c.RecentlyAddedProductsRss(null));
             "~/catalog/addproducttocompare/2".ShouldMapTo<CatalogController>(c => c.AddProductToCompareList(2));
             "~/compareproducts/".ShouldMapTo<CatalogController>(c => c.CompareProducts());
 			"~/catalog/RemoveProductFromCompare/3".ShouldMapTo<CatalogController>(c => c.RemoveProductFromCompareList(3));
@@ -78,7 +79,7 @@ namespace SmartStore.Web.MVC.Tests.Public.Infrastructure
             "~/producttag/9/se-name/".ShouldMapTo<CatalogController>(c => c.ProductsByTag(9, null));
             "~/producttag/all/".ShouldMapTo<CatalogController>(c => c.ProductTagsAll());
 
-            "~/search/".ShouldMapTo<CatalogController>(c => c.Search(null, null));
+            "~/search/".ShouldMapTo<SearchController>(c => c.Search(null));
         }
 
         [Test]
@@ -93,7 +94,6 @@ namespace SmartStore.Web.MVC.Tests.Public.Infrastructure
 			"~/customer/passwordrecovery/".ShouldMapTo<CustomerController>(c => c.PasswordRecovery());
 			"~/customer/passwordrecoveryconfirm".ShouldMapTo<CustomerController>(c => c.PasswordRecoveryConfirm(null, null));
 
-			"~/customer/myaccount/".ShouldMapTo<CustomerController>(c => c.MyAccount());
 			"~/customer/info/".ShouldMapTo<CustomerController>(c => c.Info());
 			"~/customer/addresses/".ShouldMapTo<CustomerController>(c => c.Addresses());
 			"~/customer/orders/".ShouldMapTo<CustomerController>(c => c.Orders(null));
@@ -124,7 +124,7 @@ namespace SmartStore.Web.MVC.Tests.Public.Infrastructure
         [Test]
         public void Cart_routes()
         {
-            "~/cart/".ShouldMapTo<ShoppingCartController>(c => c.Cart());
+            "~/cart/".ShouldMapTo<ShoppingCartController>(c => c.Cart(null));
 			"~/wishlist".ShouldMapTo<ShoppingCartController>(c => c.Wishlist(null));
 			"~/wishlist/aa74c80f-1edd-43f7-85df-a3cccc1b47b9".ShouldMapTo<ShoppingCartController>(c => c.Wishlist(new Guid("aa74c80f-1edd-43f7-85df-a3cccc1b47b9")));
 			"~/shoppingcart/emailwishlist".ShouldMapTo<ShoppingCartController>(c => c.EmailWishlist());
@@ -161,9 +161,7 @@ namespace SmartStore.Web.MVC.Tests.Public.Infrastructure
         public void Common_routes()
         {
             "~/contactus".ShouldMapTo<HomeController>(c => c.ContactUs());
-			"~/sitemap".ShouldMapTo<HomeController>(c => c.Sitemap());
-			"~/sitemap.xml".ShouldMapTo<HomeController>(c => c.SitemapSeo());
-            "~/settings".ShouldMapTo<CommonController>(c => c.Settings());
+			"~/sitemap.xml".ShouldMapTo<HomeController>(c => c.SitemapSeo(1));
         }
 
         [Test]

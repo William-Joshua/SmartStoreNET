@@ -63,7 +63,7 @@ namespace SmartStore.PayPal.Controllers
 
             model.Copy(settings, false);
 
-			using (Services.Settings.BeginBatch())
+			using (Services.Settings.BeginScope())
 			{
 				storeDependingSettingHelper.UpdateSettings(settings, form, storeScope, Services.Settings);
 
@@ -109,7 +109,10 @@ namespace SmartStore.PayPal.Controllers
 			var provider = PaymentService.LoadPaymentMethodBySystemName(SystemName, true);
             var processor = (provider != null ? provider.Value as PayPalStandardProvider : null);
 			if (processor == null)
-				throw new SmartException(T("Plugins.Payments.PayPal.NoModuleLoading"));
+			{
+				Logger.Warn(null, T("Plugins.Payments.PayPal.NoModuleLoading", "PDTHandler"));
+				return RedirectToAction("Completed", "Checkout", new { area = "" });
+			}
 
 			var settings = Services.Settings.LoadSetting<PayPalStandardPaymentSettings>();
 
@@ -131,9 +134,9 @@ namespace SmartStore.PayPal.Controllers
 					{
 						total = decimal.Parse(values["mc_gross"], new CultureInfo("en-US"));
 					}
-					catch (Exception exc)
+					catch (Exception ex)
 					{
-						Logger.Error(T("Plugins.Payments.PayPalStandard.FailedGetGross"), exc);
+						Logger.Error(ex, T("Plugins.Payments.PayPalStandard.FailedGetGross"));
 					}
 
 					string payer_status = string.Empty;

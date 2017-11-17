@@ -99,8 +99,15 @@ namespace SmartStoreNetWebApiClient
 
 			if (radioApi.Checked && txtFile.Text.HasValue())
 			{
+				if (string.Compare(context.HttpMethod, "POST", StringComparison.OrdinalIgnoreCase) != 0)
+				{
+					"Please select POST method for image upload.".Box(MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
+					return;
+				}
+
 				var id1 = txtIdentfier1.Text.ToInt();
 				var id2 = txtIdentfier2.Text;
+				var pictureId = txtPictureId.Text.ToInt();
 				var keyForId1 = "Id";
 				var keyForId2 = "";
 
@@ -126,30 +133,33 @@ namespace SmartStoreNetWebApiClient
 				if (id2.HasValue())
 					multiPartData.Add(keyForId2, id2);
 
-				apiConsumer.AddApiFileParameter(multiPartData, txtFile.Text);
+				apiConsumer.AddApiFileParameter(multiPartData, txtFile.Text, pictureId);
 			}
 
 			var webRequest = apiConsumer.StartRequest(context, cboContent.Text, multiPartData, out requestContent);
 			txtRequest.Text = requestContent.ToString();
 
-			var result = apiConsumer.ProcessResponse(webRequest, response);
+			var result = apiConsumer.ProcessResponse(webRequest, response, folderBrowserDialog1);
 
 			lblResponse.Text = "Response: " + response.Status;
 
 			sb.Append(response.Headers);
 
-			if (result && radioJson.Checked && radioOdata.Checked)
+			if (result && response.Content.HasValue())
 			{
-				var customers = response.TryParseCustomers();
+                if (radioJson.Checked && radioOdata.Checked)
+                {
+                    var customers = response.TryParseCustomers();
 
-				if (customers != null)
-				{
-					sb.AppendLine("Parsed {0} customer(s):".FormatInvariant(customers.Count));
+                    if (customers != null)
+                    {
+                        sb.AppendLine("Parsed {0} customer(s):".FormatInvariant(customers.Count));
 
-					customers.ForEach(x => sb.AppendLine(x.ToString()));
+                        customers.ForEach(x => sb.AppendLine(x.ToString()));
 
-					sb.Append("\r\n");
-				}
+                        sb.Append("\r\n");
+                    }
+                }
 			}
 
 			sb.Append(response.Content);
@@ -246,6 +256,8 @@ namespace SmartStoreNetWebApiClient
 			txtIdentfier1.Visible = show;
 			lblIdentfier2.Visible = show;
 			txtIdentfier2.Visible = show;
+			txtPictureId.Visible = show;
+			lblPictureId.Visible = show;
 		}
 
 		private void btnFileOpen_Click(object sender, EventArgs e)

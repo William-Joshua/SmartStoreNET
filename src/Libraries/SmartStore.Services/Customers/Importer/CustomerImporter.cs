@@ -1,8 +1,8 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Drawing;
 using System.IO;
 using System.Linq;
-using System.Linq.Expressions;
 using SmartStore.Core.Async;
 using SmartStore.Core.Data;
 using SmartStore.Core.Domain.Common;
@@ -27,10 +27,10 @@ namespace SmartStore.Services.Customers.Importer
 		private const string _attributeKeyGroup = "Customer";
 
 		private readonly IRepository<Customer> _customerRepository;
+		private readonly IRepository<CustomerRole> _customerRoleRepository;
 		private readonly IRepository<Picture> _pictureRepository;
 		private readonly ICommonServices _services;
 		private readonly IGenericAttributeService _genericAttributeService;
-		private readonly ICustomerService _customerService;
 		private readonly IPictureService _pictureService;
 		private readonly IAffiliateService _affiliateService;
 		private readonly ICountryService _countryService;
@@ -42,10 +42,10 @@ namespace SmartStore.Services.Customers.Importer
 
 		public CustomerImporter(
 			IRepository<Customer> customerRepository,
+			IRepository<CustomerRole> customerRoleRepository,
 			IRepository<Picture> pictureRepository,
 			ICommonServices services,
 			IGenericAttributeService genericAttributeService,
-			ICustomerService customerService,
 			IPictureService pictureService,
 			IAffiliateService affiliateService,
 			ICountryService countryService,
@@ -56,10 +56,10 @@ namespace SmartStore.Services.Customers.Importer
 			ForumSettings forumSettings)
 		{
 			_customerRepository = customerRepository;
+			_customerRoleRepository = customerRoleRepository;
 			_pictureRepository = pictureRepository;
 			_services = services;
 			_genericAttributeService = genericAttributeService;
-			_customerService = customerService;
 			_pictureService = pictureService;
 			_affiliateService = affiliateService;
 			_countryService = countryService;
@@ -69,7 +69,6 @@ namespace SmartStore.Services.Customers.Importer
 			_dateTimeSettings = dateTimeSettings;
 			_forumSettings = forumSettings;
 		}
-
 
 		protected override void Import(ImportExecuteContext context)
 		{
@@ -97,17 +96,20 @@ namespace SmartStore.Services.Customers.Importer
 				_genericAttributeService.GetAttributes(SystemCustomerAttributeNames.CustomerNumber, _attributeKeyGroup).Select(x => x.Value),
 				StringComparer.OrdinalIgnoreCase);
 
-			using (var scope = new DbContextScope(ctx: _services.DbContext, autoDetectChanges: false, proxyCreation: false, validateOnSave: false, autoCommit: false))
+			var allCustomerRoles = _customerRoleRepository.Table.ToDictionarySafe(x => x.SystemName, StringComparer.OrdinalIgnoreCase);
+
+			using (var scope = new DbContextScope(ctx: _services.DbContext, hooksEnabled: false, autoDetectChanges: false, proxyCreation: false, validateOnSave: false, autoCommit: false))
 			{
 				var segmenter = context.DataSegmenter;
 
 				Initialize(context);
+				AddInfoForDeprecatedFields(context);
 
 				while (context.Abort == DataExchangeAbortion.None && segmenter.ReadNextBatch())
 				{
 					var batch = segmenter.GetCurrentBatch<Customer>();
 
-					_customerRepository.Context.DetachAll(false);
+					_customerRepository.Context.DetachAll(true);
 
 					context.SetProgress(segmenter.CurrentSegmentFirstRowIndex - 1, segmenter.TotalRows);
 
@@ -130,6 +132,23 @@ namespace SmartStore.Services.Customers.Importer
 					// update result object
 					context.Result.NewRecords += batch.Count(x => x.IsNew && !x.IsTransient);
 					context.Result.ModifiedRecords += batch.Count(x => !x.IsNew && !x.IsTransient);
+
+					// ===========================================================================
+					// Process customer roles
+					// ===========================================================================
+					try
+					{
+						_customerRepository.Context.AutoDetectChangesEnabled = true;
+						ProcessCustomerRoles(context, batch, allCustomerRoles);
+					}
+					catch (Exception exception)
+					{
+						context.Result.AddError(exception, segmenter.CurrentSegment, "ProcessCustomerRoles");
+					}
+					finally
+					{
+						_customerRepository.Context.AutoDetectChangesEnabled = false;
+					}
 
 					// ===========================================================================
 					// Process generic attributes
@@ -185,15 +204,9 @@ namespace SmartStore.Services.Customers.Importer
 		{
 			_customerRepository.AutoCommitEnabled = true;
 
-			Customer lastInserted = null;
-			Customer lastUpdated = null;
 			var currentCustomer = _services.WorkContext.CurrentCustomer;
-
-			var guestRole = _customerService.GetCustomerRoleBySystemName(SystemCustomerRoleNames.Guests);
-			var registeredRole = _customerService.GetCustomerRoleBySystemName(SystemCustomerRoleNames.Registered);
-			var forumModeratorRole = _customerService.GetCustomerRoleBySystemName(SystemCustomerRoleNames.ForumModerators);
-
 			var customerQuery = _customerRepository.Table.Expand(x => x.Addresses);
+			var hasCustomerRoleSystemNames = context.DataSegmenter.HasColumn("CustomerRoleSystemNames");
 
 			foreach (var row in batch)
 			{
@@ -258,10 +271,6 @@ namespace SmartStore.Services.Customers.Importer
 					_customerRepository.Context.LoadCollection(customer, (Customer x) => x.CustomerRoles);
 				}
 
-				var isGuest = row.GetDataValue<bool>("IsGuest");
-				var isRegistered = row.GetDataValue<bool>("IsRegistered");
-				var isAdmin = row.GetDataValue<bool>("IsAdministrator");
-				var isForumModerator = row.GetDataValue<bool>("IsForumModerator");
 				var affiliateId = row.GetDataValue<int>("AffiliateId");
 
 				row.Initialize(customer, email ?? id.ToString());
@@ -293,40 +302,89 @@ namespace SmartStore.Services.Customers.Importer
 					customer.AffiliateId = affiliateId;
 				}
 
-				if (isAdmin)
-				{
-					context.Result.AddInfo("Security. Ignored administrator role.", row.GetRowInfo(), "IsAdministrator");
-				}
-
-				UpsertRole(row, guestRole, isGuest);
-				UpsertRole(row, registeredRole, isRegistered);
-				UpsertRole(row, forumModeratorRole, isForumModerator);
-
 				if (row.IsTransient)
 				{
 					_customerRepository.Insert(customer);
-					lastInserted = customer;
 				}
 				else
 				{
 					_customerRepository.Update(customer);
-					lastUpdated = customer;
 				}
 			}
 
 			var num = _customerRepository.Context.SaveChanges();
-
-			if (lastInserted != null)
-			{
-				_services.EventPublisher.EntityInserted(lastInserted);
-			}
-
-			if (lastUpdated != null)
-			{
-				_services.EventPublisher.EntityUpdated(lastUpdated);
-			}
-
 			return num;
+		}
+
+		protected virtual int ProcessCustomerRoles(
+			ImportExecuteContext context,
+			IEnumerable<ImportRow<Customer>> batch,
+			Dictionary<string, CustomerRole> allCustomerRoles)
+		{
+			CustomerRole role = null;
+			var hasCustomerRoleSystemNames = context.DataSegmenter.HasColumn("CustomerRoleSystemNames");
+
+			// Deprecated fields. Still processed for backward compatibility. Use "CustomerRoleSystemNames" instead.
+			var hasIsGuest = context.DataSegmenter.HasColumn("IsGuest");
+			var hasIsRegistered = context.DataSegmenter.HasColumn("IsRegistered");
+			var hasIsForumModerator = context.DataSegmenter.HasColumn("IsForumModerator");
+
+			foreach (var row in batch)
+			{
+				var customer = row.Entity;
+
+				// Deprecated customer role fields.
+				if (hasIsGuest)
+				{
+					UpsertRole(customer, row.GetDataValue<bool>("IsGuest"), allCustomerRoles, SystemCustomerRoleNames.Guests);
+				}
+				if (hasIsRegistered)
+				{
+					UpsertRole(customer, row.GetDataValue<bool>("IsRegistered"), allCustomerRoles, SystemCustomerRoleNames.Registered);
+				}
+				if (hasIsForumModerator)
+				{
+					UpsertRole(customer, row.GetDataValue<bool>("IsForumModerator"), allCustomerRoles, SystemCustomerRoleNames.ForumModerators);
+				}
+
+				// New customer role field.
+				if (hasCustomerRoleSystemNames)
+				{
+					var importRoleSystemNames = row.GetDataValue<List<string>>("CustomerRoleSystemNames");
+					var assignedRoles = customer.CustomerRoles.ToDictionarySafe(x => x.SystemName, StringComparer.OrdinalIgnoreCase);
+
+					// Roles to remove.
+					foreach (var customerRole in assignedRoles)
+					{
+						var systemName = customerRole.Key;
+						if (!systemName.IsCaseInsensitiveEqual(SystemCustomerRoleNames.Administrators) &&
+							!systemName.IsCaseInsensitiveEqual(SystemCustomerRoleNames.SuperAdministrators) &&
+							!importRoleSystemNames.Contains(systemName))
+						{
+							customer.CustomerRoles.Remove(customerRole.Value);
+						}
+					}
+
+					// Roles to add.
+					foreach (var systemName in importRoleSystemNames)
+					{
+						if (systemName.IsCaseInsensitiveEqual(SystemCustomerRoleNames.Administrators) ||
+							systemName.IsCaseInsensitiveEqual(SystemCustomerRoleNames.SuperAdministrators))
+						{
+							context.Result.AddInfo("Security. Ignored administrator role.", row.GetRowInfo(), "CustomerRoleSystemNames");
+						}
+						else if (!assignedRoles.ContainsKey(systemName) && allCustomerRoles.TryGetValue(systemName, out role))
+						{
+							// Never insert roles!
+							context.Services.DbContext.SetToUnchanged(role);
+
+							customer.CustomerRoles.Add(role);
+						}
+					}
+				}
+			}
+
+			return context.Services.DbContext.SaveChanges();
 		}
 
 		protected virtual int ProcessAddresses(
@@ -515,7 +573,6 @@ namespace SmartStore.Services.Customers.Importer
 				if (urlOrPath.IsEmpty())
 					continue;
 
-				Picture picture = null;
 				var equalPictureId = 0;
 				var currentPictures = new List<Picture>();
 				var seoName = _pictureService.GetPictureSeName(row.EntityDisplayName);
@@ -536,20 +593,25 @@ namespace SmartStore.Services.Customers.Importer
 
 					if (pictureBinary != null && pictureBinary.Length > 0)
 					{
-						var currentPictureId = row.Entity.GetAttribute<int>(SystemCustomerAttributeNames.AvatarPictureId);
-						if (currentPictureId != 0 && (picture = _pictureRepository.GetById(currentPictureId)) != null)
+						var pictureId = row.Entity.GetAttribute<int>(SystemCustomerAttributeNames.AvatarPictureId);
+						if (pictureId != 0)
 						{
-							currentPictures.Add(picture);
+							var picture = _pictureRepository.TableUntracked.Expand(x => x.MediaStorage).FirstOrDefault(x => x.Id == pictureId);
+							if (picture != null)
+							{
+								currentPictures.Add(picture);
+							}
 						}
 
-						pictureBinary = _pictureService.ValidatePicture(pictureBinary);
+						var size = Size.Empty;
+						pictureBinary = _pictureService.ValidatePicture(pictureBinary, image.MimeType, out size);
 						pictureBinary = _pictureService.FindEqualPicture(pictureBinary, currentPictures, out equalPictureId);
 
 						if (pictureBinary != null && pictureBinary.Length > 0)
 						{
-							if ((picture = _pictureService.InsertPicture(pictureBinary, image.MimeType, seoName, true, false, false)) != null)
+							var picture = _pictureService.InsertPicture(pictureBinary, image.MimeType, seoName, true, size.Width, size.Height, false);
+							if (picture != null)
 							{
-								_pictureRepository.Context.SaveChanges();
 								SaveAttribute(row, SystemCustomerAttributeNames.AvatarPictureId, picture.Id);
 							}
 						}
@@ -618,7 +680,6 @@ namespace SmartStore.Services.Customers.Importer
 
 		private void SaveAttribute<TPropType>(ImportRow<Customer> row, string key)
 		{
-
 			SaveAttribute(row, key, row.GetDataValue<TPropType>(key));
 		}
 
@@ -633,20 +694,44 @@ namespace SmartStore.Services.Customers.Importer
 			}
 		}
 
-		private void UpsertRole(ImportRow<Customer> row, CustomerRole role, bool value)
+		private void UpsertRole(Customer customer, bool value, Dictionary<string, CustomerRole> allRoles, string customerRoleSystemName)
 		{
-			if (role == null)
-				return;
-
-			var hasRole = row.Entity.CustomerRoles.Any(x => x.SystemName == role.SystemName);
-
-			if (value && !hasRole)
+			CustomerRole role = null;
+			if (allRoles.TryGetValue(customerRoleSystemName, out role))
 			{
-				row.Entity.CustomerRoles.Add(role);
+				var hasRole = customer.CustomerRoles.Any(x => x.SystemName == role.SystemName);
+
+				if (value && !hasRole)
+				{
+					// Never insert roles!
+					_services.DbContext.SetToUnchanged(role);
+
+					customer.CustomerRoles.Add(role);
+				}
+				else if (!value && hasRole)
+				{
+					customer.CustomerRoles.Remove(role);
+				}
 			}
-			else if (!value && hasRole)
+		}
+
+		private void AddInfoForDeprecatedFields(ImportExecuteContext context)
+		{
+			if (context.DataSegmenter.HasColumn("IsGuest"))
 			{
-				row.Entity.CustomerRoles.Remove(role);
+				context.Result.AddInfo("Deprecated field. Use CustomerRoleSystemNames instead.", null, "IsGuest");
+			}
+			if (context.DataSegmenter.HasColumn("IsRegistered"))
+			{
+				context.Result.AddInfo("Deprecated field. Use CustomerRoleSystemNames instead.", null, "IsRegistered");
+			}
+			if (context.DataSegmenter.HasColumn("IsAdministrator"))
+			{
+				context.Result.AddInfo("Deprecated field. Use CustomerRoleSystemNames instead.", null, "IsAdministrator");
+			}
+			if (context.DataSegmenter.HasColumn("IsForumModerator"))
+			{
+				context.Result.AddInfo("Deprecated field. Use CustomerRoleSystemNames instead.", null, "IsForumModerator");
 			}
 		}
 	}

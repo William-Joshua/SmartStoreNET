@@ -127,15 +127,18 @@ namespace SmartStore.PayPal.Controllers
 		[ValidateInput(false)]
 		public ActionResult IPNHandler()
 		{
-			if (!PaymentService.IsPaymentMethodActive(SystemName, Services.StoreContext.CurrentStore.Id))
-				throw new SmartException(T("Plugins.Payments.PayPal.NoModuleLoading"));
-
-			var settings = Services.Settings.LoadSetting<TSetting>();
 			byte[] param = Request.BinaryRead(Request.ContentLength);
-			//var strRequest = Encoding.ASCII.GetString(param);
 			var strRequest = Encoding.UTF8.GetString(param);
-			Dictionary<string, string> values;
+
+			if (!PaymentService.IsPaymentMethodActive(SystemName, Services.StoreContext.CurrentStore.Id))
+			{
+				Logger.Warn(new SmartException(strRequest), T("Plugins.Payments.PayPal.NoModuleLoading", "IPNHandler"));
+				return Content(string.Empty);
+			}
+
 			var sb = new StringBuilder();
+			Dictionary<string, string> values;
+			var settings = Services.Settings.LoadSetting<TSetting>();
 
 			if (VerifyIPN(settings, strRequest, out values))
 			{
@@ -232,11 +235,14 @@ namespace SmartStore.PayPal.Controllers
 									}
 								}
 
-								Logger.Information(T("Plugins.Payments.PayPal.IpnRecurringPaymentInfo"), new SmartException(sb.ToString()));
+								Logger.Info(new SmartException(sb.ToString()), T("Plugins.Payments.PayPal.IpnRecurringPaymentInfo"));
 							}
 							else
 							{
-								Logger.Error(T("Plugins.Payments.PayPal.IpnOrderNotFound"), new SmartException(sb.ToString()));
+								if (rp_invoice_id.IsEmpty())
+									Logger.Warn(new SmartException(sb.ToString()), T("Plugins.Payments.PayPal.IpnIrregular", "rp_invoice_id"));
+								else
+									Logger.Error(new SmartException(sb.ToString()), T("Plugins.Payments.PayPal.IpnOrderNotFound"));
 							}
 						}
 						#endregion
@@ -306,7 +312,10 @@ namespace SmartStore.PayPal.Controllers
 							}
 							else
 							{
-								Logger.Error(T("Plugins.Payments.PayPal.IpnOrderNotFound"), new SmartException(sb.ToString()));
+								if (orderNumber.IsEmpty())
+									Logger.Warn(new SmartException(sb.ToString()), T("Plugins.Payments.PayPal.IpnIrregular", "custom"));
+								else
+									Logger.Error(new SmartException(sb.ToString()), T("Plugins.Payments.PayPal.IpnOrderNotFound"));
 							}
 						}
 						#endregion
@@ -315,7 +324,7 @@ namespace SmartStore.PayPal.Controllers
 			}
 			else
 			{
-				Logger.Error(T("Plugins.Payments.PayPal.IpnFailed"), new SmartException(strRequest));
+				Logger.Error(new SmartException(strRequest), T("Plugins.Payments.PayPal.IpnFailed"));
 			}
 
 			//nothing should be rendered to visitor

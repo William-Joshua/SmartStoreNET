@@ -15,25 +15,25 @@ namespace SmartStore.Web.Framework.Filters
 {
 	public class HandleExceptionFilter : IActionFilter
     {
-		private readonly Lazy<ILogger> _logger;
+		private readonly ILoggerFactory _loggerFactory;
 		private readonly Lazy<IEnumerable<IExceptionFilter>> _exceptionFilters;
 		private readonly Lazy<IWorkContext> _workContext;
 
 		public HandleExceptionFilter(
-			Lazy<ILogger> logger, 
+			ILoggerFactory loggerFactory, 
 			Lazy<IEnumerable<IExceptionFilter>> exceptionFilters,
 			Lazy<IWorkContext> workContext)
 		{
-			this._logger = logger;
-			this._exceptionFilters = exceptionFilters;
-			this._workContext = workContext;
+			_loggerFactory = loggerFactory;
+			_exceptionFilters = exceptionFilters;
+			_workContext = workContext;
 		}
 
-        public void OnActionExecuting(ActionExecutingContext filterContext)
+        public virtual void OnActionExecuting(ActionExecutingContext filterContext)
         {
         }
         
-        public void OnActionExecuted(ActionExecutedContext filterContext)
+        public virtual void OnActionExecuted(ActionExecutedContext filterContext)
         {
 			var descriptor = filterContext.ActionDescriptor;
 			
@@ -41,11 +41,11 @@ namespace SmartStore.Web.Framework.Filters
 			// don't provide custom errors if the action has some custom code to handle exceptions
 			if (!filterContext.ActionDescriptor.GetCustomAttributes(typeof(HandleErrorAttribute), false).Any())
 			{
-				if (!filterContext.ExceptionHandled && filterContext.Exception != null && filterContext.HttpContext.IsCustomErrorEnabled)
+				if (!filterContext.ExceptionHandled && filterContext.Exception != null)
 				{
 					if (ShouldHandleException(filterContext.Exception))
 					{
-						LogException(filterContext.Exception);
+						LogException(filterContext.Exception, filterContext.ActionDescriptor.ControllerDescriptor);
 
 						// inform exception filters of the exception that was suppressed
 						var exceptionContext = new ExceptionContext(filterContext.Controller.ControllerContext, filterContext.Exception);
@@ -110,7 +110,7 @@ namespace SmartStore.Web.Framework.Filters
 				// handle not found (404) from within the MVC pipeline (only called when HttpNotFoundResult is returned from actions)
 				var requestContext = filterContext.RequestContext;
 				var url = requestContext.HttpContext.Request.RawUrl;
-				
+
 				filterContext.Result = new ViewResult
 				{
 					ViewName = "NotFound",
@@ -137,7 +137,7 @@ namespace SmartStore.Web.Framework.Filters
 				exception is SEHException);
 		}
 
-		protected void LogException(Exception exception)
+		protected void LogException(Exception exception, ControllerDescriptor descriptor)
 		{
 			if (exception == null)
 				return;
@@ -152,9 +152,8 @@ namespace SmartStore.Web.Framework.Filters
 
 			try
 			{
-				var logger = _logger.Value;
-				var workContext = _workContext.Value;
-				logger.Error(exception.Message, exception, workContext.CurrentCustomer);
+				var logger = _loggerFactory.GetLogger(descriptor.ControllerType);
+				logger.Error(exception);
 			}
 			catch
 			{

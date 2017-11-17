@@ -18,7 +18,7 @@ namespace SmartStore.Core.Domain.Orders
     /// Represents an order
     /// </summary>
     [DataContract]
-	public partial class Order : BaseEntity, ISoftDeletable
+	public partial class Order : BaseEntity, IAuditable, ISoftDeletable
     {
 
         private ICollection<DiscountUsageHistory> _discountUsageHistory;
@@ -229,6 +229,12 @@ namespace SmartStore.Core.Domain.Orders
         /// </summary>
         [DataMember]
         public decimal OrderDiscount { get; set; }
+
+        /// <summary>
+        /// /// Gets or sets the order total rounding amount
+        /// </summary>
+        [DataMember]
+        public decimal OrderTotalRounding { get; set; }
 
         /// <summary>
         /// Gets or sets the order total

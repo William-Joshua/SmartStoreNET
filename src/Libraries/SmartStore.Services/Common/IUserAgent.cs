@@ -5,8 +5,7 @@ using System.Text;
 using System.Threading.Tasks;
 
 namespace SmartStore.Services.Common
-{
-	
+{	
 	public interface IUserAgent
 	{
 		string RawValue { get; set; }
@@ -73,6 +72,7 @@ namespace SmartStore.Services.Common
 		};
 
 		private bool? _isBot;
+		private bool? _supportsWebP;
 
 		public UserAgentInfo(string family, string major, string minor, string patch)
 		{
@@ -99,6 +99,41 @@ namespace SmartStore.Services.Common
 					_isBot = s_Bots.Contains(Family);
 				}
 				return _isBot.Value;
+			}
+		}
+		public bool SupportsWebP
+		{
+			get
+			{
+				if (_supportsWebP == null)
+				{
+					if (Family == "Chrome")
+					{
+						_supportsWebP = Major.ToInt() >= 49;
+					}
+					else if (Family.StartsWith("Chrome Mobile"))
+					{
+						_supportsWebP = Major.ToInt() >= 61;
+					}
+					else if (Family == "Opera")
+					{
+						_supportsWebP = Major.ToInt() >= 48;
+					}
+					else if (Family == "Opera Mini")
+					{
+						_supportsWebP = true;
+					}
+					else if (Family == "Android")
+					{
+						_supportsWebP = Major.ToInt() >= 5 || (Major.ToInt() == 4 && Minor.ToInt() >= 4);
+					}
+					else
+					{
+						_supportsWebP = false;
+					}
+				}
+
+				return _supportsWebP.Value;
 			}
 		}
 	}

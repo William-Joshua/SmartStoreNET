@@ -172,7 +172,7 @@ namespace SmartStore.Services.DataExchange.Import
 
 		public virtual ImportProfile InsertImportProfile(string fileName, string name, ImportEntityType entityType)
 		{
-			Guard.ArgumentNotEmpty(() => fileName);
+			Guard.NotEmpty(fileName, nameof(fileName));
 
 			if (name.IsEmpty())
 				name = GetNewProfileName(entityType);
@@ -227,14 +227,13 @@ namespace SmartStore.Services.DataExchange.Import
 				.ToValidPath()
 				.Truncate(_dataExchangeSettings.MaxFileNameLength);
 
-			profile.FolderName = FileSystemHelper.CreateNonExistingDirectoryName(CommonHelper.MapPath("~/App_Data/ImportProfiles"), profile.FolderName);
+			var path = DataSettings.Current.TenantPath + "/ImportProfiles";
+			profile.FolderName = FileSystemHelper.CreateNonExistingDirectoryName(CommonHelper.MapPath(path), profile.FolderName);
 
 			_importProfileRepository.Insert(profile);
 
 			task.Alias = profile.Id.ToString();
 			_scheduleTaskService.UpdateTask(task);
-
-			_eventPublisher.EntityInserted(profile);
 
 			return profile;
 		}
@@ -245,8 +244,6 @@ namespace SmartStore.Services.DataExchange.Import
 				throw new ArgumentNullException("profile");
 
 			_importProfileRepository.Update(profile);
-
-			_eventPublisher.EntityUpdated(profile);
 		}
 
 		public virtual void DeleteImportProfile(ImportProfile profile)
@@ -261,8 +258,6 @@ namespace SmartStore.Services.DataExchange.Import
 
 			var scheduleTask = _scheduleTaskService.GetTaskById(scheduleTaskId);
 			_scheduleTaskService.DeleteTask(scheduleTask);
-
-			_eventPublisher.EntityDeleted(profile);
 
 			if (System.IO.Directory.Exists(folder))
 			{

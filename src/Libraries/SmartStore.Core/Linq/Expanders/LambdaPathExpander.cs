@@ -2,14 +2,11 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Linq.Expressions;
-using System.Linq.Dynamic;
-using System.ComponentModel;
 using System.Reflection;
 using SmartStore.Utilities;
 
 namespace SmartStore.Linq
 {
-
     public class LambdaPathExpander : IPathExpander
     {
         private readonly IList<LambdaExpression> _expands;
@@ -34,7 +31,7 @@ namespace SmartStore.Linq
 
         public virtual void Expand<T, TTarget>(Expression<Func<TTarget, object>> path)
         {
-            Guard.ArgumentNotNull(path, "path");
+            Guard.NotNull(path, "path");
             _expands.Add(path);
         }
 
@@ -45,8 +42,8 @@ namespace SmartStore.Linq
 
         public virtual void Expand(Type type, string path)
         {
-            Guard.ArgumentNotNull(type, "type");
-            Guard.ArgumentNotEmpty(path, "path");
+            Guard.NotNull(type, "type");
+            Guard.NotEmpty(path, "path");
 
             Type t = type;
 
@@ -118,8 +115,8 @@ namespace SmartStore.Linq
         #region Old
         //public virtual void Expand(Type type, string path)
         //{
-        //    Guard.ArgumentNotNull(type, "type");
-        //    Guard.ArgumentNotEmpty(path, "path");
+        //    Guard.NotNull(type, "type");
+        //    Guard.NotEmpty(path, "path");
 
         //    Type t = type;
         //    IDictionary<Type, string> paths = new Dictionary<Type, string>();
@@ -211,7 +208,7 @@ namespace SmartStore.Linq
 
     //    public PathExpressionParser(string path)
     //    {
-    //        Guard.ArgumentNotEmpty(path, "path");
+    //        Guard.NotEmpty(path, "path");
 
     //        Path = path;
     //        SetPos(0);

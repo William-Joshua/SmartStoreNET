@@ -355,7 +355,7 @@ namespace SmartStore.Admin.Controllers
 
 					return Json(new
 					{
-						importResult = this.RenderPartialViewToString("ProfileImportResult", importResult)
+						importResult = this.RenderPartialViewToString("~/Administration/Views/Import/ProfileImportResult.cshtml", importResult)
 					},
 					JsonRequestBehavior.AllowGet);
 				}
@@ -370,7 +370,7 @@ namespace SmartStore.Admin.Controllers
 			if (!Services.Permissions.Authorize(StandardPermissionProvider.ManageImports))
 				return AccessDeniedView();
 
-			var importFile = Path.Combine(FileSystemHelper.TempDir(), model.TempFileName.EmptyNull());
+			var importFile = Path.Combine(FileSystemHelper.TempDirTenant(), model.TempFileName.EmptyNull());
 
 			if (System.IO.File.Exists(importFile))
 			{
@@ -592,7 +592,7 @@ namespace SmartStore.Admin.Controllers
 				{
 					if (id == 0)
 					{
-						var path = Path.Combine(FileSystemHelper.TempDir(), postedFile.FileName);
+						var path = Path.Combine(FileSystemHelper.TempDirTenant(), postedFile.FileName);
 						FileSystemHelper.Delete(path);
 
 						success = postedFile.Stream.ToFile(path);
@@ -665,8 +665,11 @@ namespace SmartStore.Admin.Controllers
 			if (profile == null)
 				return RedirectToAction("List");
 
-			var taskParams = new Dictionary<string, string>();
-			taskParams.Add(TaskExecutor.CurrentCustomerIdParamName, Services.WorkContext.CurrentCustomer.Id.ToString());
+			var taskParams = new Dictionary<string, string>
+			{
+				{ TaskExecutor.CurrentCustomerIdParamName, Services.WorkContext.CurrentCustomer.Id.ToString() },
+				{ TaskExecutor.CurrentStoreIdParamName, Services.StoreContext.CurrentStore.Id.ToString() }
+			};
 
 			_taskScheduler.RunSingleTask(profile.SchedulingTaskId, taskParams);
 
@@ -734,7 +737,7 @@ namespace SmartStore.Admin.Controllers
 						}
 						catch (IOException)
 						{
-							NotifyWarning(T("Admin.Common.FileInUse"));
+                            message = T("Admin.Common.FileInUse");
 						}
 					}
 				}

@@ -13,7 +13,7 @@ namespace SmartStore.Web.Framework.UI
 
         public TabFactory(IList<Tab> items, HtmlHelper htmlHelper)
         {
-            Guard.ArgumentNotNull(() => htmlHelper);
+            Guard.NotNull(htmlHelper, nameof(htmlHelper));
 
             _items = items;
             _htmlHelper = htmlHelper;
@@ -23,6 +23,22 @@ namespace SmartStore.Web.Framework.UI
         {
             var item = new Tab();
             _items.Add(item);
+            return new TabBuilder(item, _htmlHelper);
+        }
+
+        public virtual TabBuilder Insert(int index)
+        {
+            var item = new Tab();
+
+            if (_items.Count > index)
+            {
+                _items.Insert(index, item);
+            }
+            else
+            {
+                _items.Add(item);
+            }
+
             return new TabBuilder(item, _htmlHelper);
         }
     }

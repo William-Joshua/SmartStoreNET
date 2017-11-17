@@ -50,16 +50,17 @@
         }
         
     </script>
-    
-	@Html.Action("StoreScopeConfiguration", "Setting")
-	@Html.ValidationSummary(false)
+
+    Html.RenderAction("StoreScopeConfiguration", "Setting");
+
+    @Html.ValidationSummary(false)
     
     @(Html.SmartStore().TabStrip().Name("catalogsettings-edit").Items(x =>
-	{
-		x.Add().Text(T("Admin.Configuration.Settings.ShoppingCart.CartSettings").Text).Content(@TabCartSettings()).Selected(true);
-        x.Add().Text(T("Admin.Configuration.Settings.ShoppingCart.Checkout").Text).Content(@TabCheckoutSettings());
-		x.Add().Text(T("Admin.Configuration.Settings.ShoppingCart.WishlistSettings").Text).Content(@TabWishlistSettings());
-    }))
+     {
+         x.Add().Text(T("Admin.Configuration.Settings.ShoppingCart.CartSettings").Text).Content(@TabCartSettings()).Selected(true);
+         x.Add().Text(T("Admin.Configuration.Settings.ShoppingCart.Checkout").Text).Content(@TabCheckoutSettings());
+         x.Add().Text(T("Admin.Configuration.Settings.ShoppingCart.WishlistSettings").Text).Content(@TabWishlistSettings());
+     }))
 }
 
 @helper TabCartSettings()
@@ -212,15 +213,6 @@
             <td class="adminData">
                 @Html.SettingEditorFor(model => model.CrossSellsNumber)
                 @Html.ValidationMessageFor(model => model.CrossSellsNumber)
-            </td>
-        </tr>
-        <tr>
-            <td class="adminTitle">
-                @Html.SmartLabelFor(model => model.RoundPricesDuringCalculation)
-            </td>
-            <td class="adminData">
-                @Html.SettingEditorFor(model => model.RoundPricesDuringCalculation)
-                @Html.ValidationMessageFor(model => model.RoundPricesDuringCalculation)
             </td>
         </tr>
     </table>
